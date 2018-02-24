@@ -36,7 +36,10 @@ SGF_DIR = os.path.join(BASE_DIR, 'sgf')
 TRAINING_CHUNK_DIR = os.path.join(BASE_DIR, 'data', 'training_chunks')
 
 # How many games before the selfplay workers will stop trying to play more.
-MAX_GAMES_PER_GENERATION = 150000
+MAX_GAMES_PER_GENERATION = 10000
+
+# How many games minimum, until the trainer will train
+MIN_GAMES_PER_GENERATION = 5000
 
 # What percent of games to holdout from training per generation
 HOLDOUT_PCT = 0.05
@@ -135,6 +138,16 @@ def gather():
 
 def train(logdir=None):
     model_num, model_name = get_latest_model()
+
+    games = gfile.Glob(os.path.join(SELFPLAY_DIR, model_name, '*.zz'))
+    if len(games) < MIN_GAMES_PER_GENERATION:
+        print("{} doesn't have enough games to train a new model yet ({})".format(
+            model_name, len(games)))
+        print("Sleeping...")
+        time.sleep(10*60)
+        print("Done...")
+        sys.exit(1)
+
     print("Training on gathered game data, initializing from {}".format(model_name))
     new_model_name = shipname.generate(model_num + 1)
     print("New model will be {}".format(new_model_name))
