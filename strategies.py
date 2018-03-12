@@ -27,7 +27,7 @@ from mcts import MCTSNode, MAX_DEPTH
 import go
 
 # When to do deterministic move selection.  ~30 moves on a 19x19, ~8 on 9x9
-TEMPERATURE_CUTOFF = int((go.N * go.N) / 12)
+TEMPERATURE_CUTOFF = int((go.N * go.N) / 12) - 1  # Dont be odd for 19
 
 
 def time_recommendation(move_num, seconds_per_move=5, time_limit=15*60,
