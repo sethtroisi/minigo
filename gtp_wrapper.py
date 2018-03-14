@@ -115,17 +115,32 @@ class MCTSPlayer(MCTSPlayerMixin, GtpInterface):
 class CGOSPlayer(CGOSPlayerMixin, GtpInterface):
     pass
 
+class KGSPlayer(MCTSPlayer):
+    def __init__(self, **kwargs):
+        self.they_passed = False
+        super().__init__(**kwargs)
 
-def make_gtp_instance(read_file, readouts_per_move=100, verbosity=1, cgos_mode=False):
+    def get_move(self, color):
+        if self.they_passed:
+            return gtp.PASS
+        return super().get_move(color)
+
+
+    def make_move(self, color, vertex):
+        if vertex == gtp.PASS:
+            self.they_passed = True
+        else:
+            self.they_passed = False
+        return super().make_move(color, vertex)
+
+
+def make_gtp_instance(read_file, readouts_per_move=100, verbosity=1, cgos_mode=False, kgs_mode=True):
     n = DualNetwork(read_file)
-    instance = MCTSPlayer(n, simulations_per_move=readouts_per_move,
-                          verbosity=verbosity, two_player_mode=True)
-    gtp_engine = gtp.Engine(instance)
     if cgos_mode:
         instance = CGOSPlayer(n, seconds_per_move=5,
                               verbosity=verbosity, two_player_mode=True)
     else:
-        instance = MCTSPlayer(n, simulations_per_move=readouts_per_move,
+        instance = KGSPlayer(network=n, simulations_per_move=readouts_per_move,
                               verbosity=verbosity, two_player_mode=True)
     name = "Somebot-" + os.path.basename(read_file)
     gtp_engine = gtp_extensions.GTPDeluxe(instance, name=name)
