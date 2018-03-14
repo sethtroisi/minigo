@@ -61,6 +61,7 @@ class GtpInterface(object):
                 print("Error saving sgf", file=sys.stderr, flush=True)
         self.position = go.Position(komi=self.komi)
         self.initialize_game(self.position)
+        return True
 
     def accomodate_out_of_turn(self, color):
         if not translate_gtp_colors(color) == self.position.to_play:
@@ -115,6 +116,7 @@ class MCTSPlayer(MCTSPlayerMixin, GtpInterface):
 class CGOSPlayer(CGOSPlayerMixin, GtpInterface):
     pass
 
+
 class KGSPlayer(MCTSPlayer):
     def __init__(self, **kwargs):
         self.they_passed = False
@@ -125,13 +127,16 @@ class KGSPlayer(MCTSPlayer):
             return gtp.PASS
         return super().get_move(color)
 
-
     def make_move(self, color, vertex):
         if vertex == gtp.PASS:
             self.they_passed = True
         else:
             self.they_passed = False
         return super().make_move(color, vertex)
+
+    def clear(self):
+        self.they_passed = False
+        return super().clear()
 
 
 def make_gtp_instance(read_file, readouts_per_move=100, verbosity=1, cgos_mode=False, kgs_mode=True):
@@ -141,7 +146,7 @@ def make_gtp_instance(read_file, readouts_per_move=100, verbosity=1, cgos_mode=F
                               verbosity=verbosity, two_player_mode=True)
     else:
         instance = KGSPlayer(network=n, simulations_per_move=readouts_per_move,
-                              verbosity=verbosity, two_player_mode=True)
+                             verbosity=verbosity, two_player_mode=True)
     name = "Somebot-" + os.path.basename(read_file)
     gtp_engine = gtp_extensions.GTPDeluxe(instance, name=name)
     return gtp_engine
