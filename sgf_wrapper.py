@@ -155,7 +155,7 @@ def replay_sgf(sgf_contents):
     collection = sgf.parse(sgf_contents)
     game = collection.children[0]
     props = game.root.properties
-    assert int(sgf_prop(props.get('GM', ['1']))) == 1, "Not a Go SGF!"
+    assert int(sgf_prop_get(props, 'GM', '1')) == 1, "Not a Go SGF!"
 
     komi = 0
     if props.get('KM') != None:
