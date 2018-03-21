@@ -14,16 +14,14 @@ Only grab games after 2005 (default is 2000)
 python training_curve.py --min_year=2005
 """
 import sys; sys.path.insert(0, '.')
-import sgf_wrapper
+
+import matplotlib
+matplotlib.use('Agg')
 
 import go
 import dual_net
-import preprocessing
-import selfplay_mcts
-import evaluation
 import sgf_wrapper
 import utils
-import rl_loop
 import os
 import shipname
 import main
@@ -34,7 +32,7 @@ import coords
 import pandas as pd
 import tensorflow as tf
 import sgf
-import pdb
+import pickle
 
 from tqdm import tqdm
 from sgf_wrapper import sgf_prop
@@ -60,6 +58,7 @@ tf.app.flags.DEFINE_integer("eval_every", 5,
                             "Eval every k models to generate the curve")
 
 FLAGS = tf.app.flags.FLAGS
+
 
 def get_model_paths(model_dir):
     '''Returns all model paths in the model_dir.'''
@@ -159,14 +158,14 @@ def find_and_filter_sgf_files(base_dir, min_year = None, komi = None):
       if count%5000 == 0:
         print("Parsed {}, Found {}".format(count, len(sgf_files)))
       if filename.endswith('.sgf'):
-        path = os.sep.join([dirpath, filename])
+        path = os.path.join(dirpath, filename)
         props = get_sgf_props(path)
         if check_year(props, min_year) and check_komi(props, komi):
           sgf_files.append(path)
   print("Found {} sgf files matching filters".format(len(sgf_files)))
   return sgf_files
 
-def sample_positions_from_games(sgf_files, num_positions=1):
+def sample_positions_from_games(rand, sgf_files, num_positions=1):
   pos_data = []
   move_data = []
   result_data = []
@@ -178,10 +177,12 @@ def sample_positions_from_games(sgf_files, num_positions=1):
       print(i)
     try:
       positions, moves, result, props = parse_sgf(path)
+    except KeyboardInterrupt:
+      raise
     except:
+      print (path)
       fail_count+=1
       print("Fail count: {}".format(fail_count))
-
       continue
 
     #add entire game
@@ -191,7 +192,7 @@ def sample_positions_from_games(sgf_files, num_positions=1):
       move_idxs.extend(range(len(positions)))
       result_data.extend([result for i in range(len(positions))])
     else:
-      for idx in np.random.choice(len(positions), num_positions):
+      for idx in rand.choice(len(positions), num_positions):
         pos_data.append(positions[idx])
         move_data.append(moves[idx])
         result_data.append(result)
@@ -200,13 +201,16 @@ def sample_positions_from_games(sgf_files, num_positions=1):
   return pos_data, move_data, result_data, move_idxs
 
 
-def get_training_curve_data(model_dir, pos_data, move_data, result_data, idx_start=150, eval_every=10):
+def get_training_curve_data(df, model_dir, pos_data, move_data, result_data, idx_start=150, eval_every=10):
   model_paths = get_model_paths(model_dir)
-  df = pd.DataFrame()
   player=None
 
   print("Evaluating models {}-{}, eval_every={}".format(idx_start, len(model_paths), eval_every))
   for idx in tqdm(range(idx_start, len(model_paths), eval_every)):
+    if "num" in df and idx in df["num"].values:
+      print ("idx {} already processed => {}".format(idx, df[df['num'] == idx]))
+      continue
+
     if player:
       restore_params(model_paths[idx], player)
     else:
@@ -216,33 +220,104 @@ def get_training_curve_data(model_dir, pos_data, move_data, result_data, idx_sta
 
     avg_acc = np.mean(correct)
     avg_mse = np.mean(squared_errors)
-    print("Model: {}, acc: {}, mse: {}".format(model_paths[idx], avg_acc, avg_mse))
+    print("Model: {}, acc: {:4f}, mse: {:4f}".format(model_paths[idx], avg_acc, avg_mse))
     df = df.append({"num": idx, "acc": avg_acc, "mse": avg_mse}, ignore_index=True)
+
   return df
+
+
+def exponential_moving_average(data, alpha = 0.2):
+  averages = []
+  avg = data[0] if len(data) > 0 else 0
+  for value in data:
+    avg = alpha * value + (1 - alpha) * avg
+    averages.append(avg)
+  return averages
 
 
 def save_plots(data_dir, df):
   plt.plot(df["num"], df["acc"])
+  plt.plot(df["num"], exponential_moving_average(df["acc"]))
   plt.xlabel("Model idx")
   plt.ylabel("Accuracy")
   plt.title("Accuracy in Predicting Professional Moves")
-  plot_path = os.sep.join([data_dir, "move_acc.png"])
+  plot_path = os.path.join(data_dir, "move_acc.png")
   plt.savefig(plot_path)
 
-  plt.figure()
+  plt.clf()
 
   plt.plot(df["num"], df["mse"])
+  plt.plot(df["num"], exponential_moving_average(df["mse"]))
   plt.xlabel("Model idx")
   plt.ylabel("MSE/4")
   plt.title("MSE in predicting outcome")
-  plot_path = os.sep.join([data_dir, "value_mse.png"])
+  plot_path = os.path.join(data_dir, "value_mse.png")
   plt.savefig(plot_path)
 
+  df = df.tail(40)
+  df = df.reset_index(drop=True)
+
+  plt.clf()
+
+  plt.plot(df["num"], df["acc"])
+  plt.plot(df["num"], exponential_moving_average(df["acc"]))
+  plt.xlabel("Model idx")
+  plt.ylabel("Accuracy")
+  plt.title("Accuracy in Predicting Professional Moves")
+  plot_path = os.path.join(data_dir, "move_acc2.png")
+  plt.savefig(plot_path)
+
+  plt.clf()
+
+  plt.plot(df["num"], df["mse"])
+  plt.plot(df["num"], exponential_moving_average(df["mse"]))
+  plt.xlabel("Model idx")
+  plt.ylabel("MSE/4")
+  plt.title("MSE in predicting outcome")
+  plot_path = os.path.join(data_dir, "value_mse2.png")
+  plt.savefig(plot_path)
+
+
+
+
 def main(unusedargv):
+  data_dir = FLAGS.plot_dir
+  df_save_file = os.path.join(data_dir, "training_curve_df")
+  df_params = [FLAGS.idx_start, FLAGS.eval_every,
+               FLAGS.komi, FLAGS.num_positions, FLAGS.sgf_dir]
+  try:
+    with open(df_save_file, "rb") as pickle_file:
+      saved, df, seed = pickle.load(pickle_file)
+      if df_params == saved:
+        with pd.option_context("display.max_rows", 10):
+          print(df)
+      else:
+        print("Can't reuse {} != {}".format(df_params, saved))
+        df = pd.DataFrame()
+  except Exception as e:
+    print ("Exception:", e)
+    seed = np.random.randint(10000)
+    df = pd.DataFrame()
+
+  print ("seed:", seed)
+  rand = np.random.RandomState(seed)
+  print (rand.randint(100))
+
   sgf_files = find_and_filter_sgf_files(FLAGS.sgf_dir, FLAGS.min_year, FLAGS.komi)
-  pos_data, move_data, result_data, move_idxs = sample_positions_from_games(sgf_files=sgf_files, num_positions=FLAGS.num_positions)
-  df = get_training_curve_data(FLAGS.model_dir, pos_data, move_data, result_data, FLAGS.idx_start, eval_every=FLAGS.eval_every)
-  save_plots(FLAGS.plot_dir, df)
+  pos_data, move_data, result_data, move_idxs = sample_positions_from_games(
+      rand, sgf_files=sgf_files, num_positions=FLAGS.num_positions)
+
+  df = get_training_curve_data(df, FLAGS.model_dir, pos_data, move_data, result_data, FLAGS.idx_start, eval_every=FLAGS.eval_every)
+  df['num'] = df.num.astype(np.int64)
+
+  try:
+    with open(df_save_file, "wb") as pickle_file:
+      pickle.dump((df_params, df, seed), pickle_file)
+  except:
+    pass
+
+  print ("Saving plots", data_dir)
+  save_plots(data_dir, df)
 
 FLAGS = tf.app.flags.FLAGS
 
