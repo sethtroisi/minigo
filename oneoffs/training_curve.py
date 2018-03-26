@@ -121,7 +121,7 @@ def sample_positions_from_games(rand, sgf_files, num_positions=1):
       raise
     except Exception as e:
       fail_count += 1
-      print("Fail {}, while parsing {}: {}".format(fail_count, path, e)
+      print("Fail {}, while parsing {}: {}".format(fail_count, path, e))
       continue
 
     #add entire game
@@ -230,7 +230,7 @@ def load_checkpoint(save_file, params):
   rand = np.random.RandomState(seed)
   print (rand.randint(100))
 
-  return df, rand
+  return df, rand, seed
 
 
 def main(unusedargv):
@@ -239,19 +239,19 @@ def main(unusedargv):
   checkpoint_params = [FLAGS.idx_start, FLAGS.eval_every,
                FLAGS.komi, FLAGS.num_positions, FLAGS.sgf_dir]
 
-  df, rand = load_checkpoint(checkpoint_save_file, checkpoint_params)
+  df, rand, seed = load_checkpoint(checkpoint_save_file, checkpoint_params)
 
   sgf_files = oneoff_utils.find_and_filter_sgf_files(FLAGS.sgf_dir, FLAGS.min_year, FLAGS.komi)
   pos_data, move_data, result_data, move_idxs = sample_positions_from_games(
       rand, sgf_files=sgf_files, num_positions=FLAGS.num_positions)
 
-  #df = get_training_curve_data(df, FLAGS.model_dir, pos_data, move_data, result_data, FLAGS.idx_start, eval_every=FLAGS.eval_every)
-  #df['num'] = df.num.astype(np.int64)
+  df = get_training_curve_data(df, FLAGS.model_dir, pos_data, move_data, result_data, FLAGS.idx_start, eval_every=FLAGS.eval_every)
+  df['num'] = df.num.astype(np.int64)
 
-  # oneoffutils.save_checkpoint(checkpoint_save_file, checkpoint_params, (seed, df))
+  oneoff_utils.save_checkpoint(checkpoint_save_file, checkpoint_params, (seed, df))
 
-  #print ("Saving plots", data_dir)
-  #save_plots(data_dir, df)
+  print ("Saving plots", data_dir)
+  save_plots(data_dir, df)
 
 FLAGS = tf.app.flags.FLAGS
 

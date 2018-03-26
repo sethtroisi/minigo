@@ -157,10 +157,8 @@ def replay_sgf(sgf_contents):
     props = game.root.properties
     assert int(sgf_prop_get(props, 'GM', '1')) == 1, "Not a Go SGF!"
 
-    komi = 0
-    if props.get('KM') != None:
-        komi = float(sgf_prop(props.get('KM')))
-    result = utils.parse_game_result(sgf_prop(props.get('RE')))
+    komi = float(sgf_prop_get(props, 'KM', 0))
+    result = utils.parse_game_result(sgf_prop(props.get('RE', '')))
 
     pos = Position(komi=komi)
     current_node = game.root
