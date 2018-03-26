@@ -18,6 +18,8 @@ import sys; sys.path.insert(0, '.')
 import matplotlib
 matplotlib.use('Agg')
 
+import oneoff_utils
+
 import go
 import dual_net
 import sgf_wrapper
@@ -103,68 +105,6 @@ def eval_player(player, positions, moves, results):
   square_err = (values - results)**2/4
   return top_move_agree, square_err
 
-def get_sgf_props(sgf_path):
-  with open(sgf_path) as f:
-    sgf_contents = f.read()
-  collection = sgf.parse(sgf_contents)
-  game = collection.children[0]
-  props = game.root.properties
-  return props
-
-def parse_sgf(sgf_path):
-  with open(sgf_path) as f:
-    sgf_contents = f.read()
-
-  collection = sgf.parse(sgf_contents)
-  game = collection.children[0]
-  props = game.root.properties
-  assert int(sgf_prop(props.get('GM', ['1']))) == 1, "Not a Go SGF!"
-
-  result = utils.parse_game_result(sgf_prop(props.get('RE')))
-
-  positions, moves = zip(*[(p.position, p.next_move) for p in sgf_wrapper.replay_sgf(sgf_contents)])
-  return positions, moves, result, props
-
-def check_year(props, year):
-  if year is None:
-    return True
-  if props.get('DT') is None:
-    return False
-
-  try:
-    #Most sgf files in this database have dates of the form
-    #"2005-01-15", but there are some rare exceptions like
-    #"Broadcasted on 2005-01-15.
-    year_sgf = int(props.get('DT')[0][:4])
-  except:
-    return False
-  #TODO: better to use datetime comparison here?
-  return year_sgf >= year
-
-def check_komi(props, komi_str):
-  if komi_str is None:
-    return True
-  if props.get('KM') is None:
-    return False
-  return props.get('KM')[0] == komi_str
-
-def find_and_filter_sgf_files(base_dir, min_year = None, komi = None):
-  sgf_files = []
-  count = 0
-  print("Finding all sgf files in {} with year >= {} and komi = {}".format(base_dir, min_year, komi))
-  for i, (dirpath, dirnames, filenames) in tqdm(enumerate(os.walk(base_dir))):
-    for filename in filenames:
-      count+=1
-      if count%5000 == 0:
-        print("Parsed {}, Found {}".format(count, len(sgf_files)))
-      if filename.endswith('.sgf'):
-        path = os.path.join(dirpath, filename)
-        props = get_sgf_props(path)
-        if check_year(props, min_year) and check_komi(props, komi):
-          sgf_files.append(path)
-  print("Found {} sgf files matching filters".format(len(sgf_files)))
-  return sgf_files
-
 def sample_positions_from_games(rand, sgf_files, num_positions=1):
   pos_data = []
   move_data = []
@@ -176,13 +116,12 @@ def sample_positions_from_games(rand, sgf_files, num_positions=1):
     if i % 1000 == 0:
       print(i)
     try:
-      positions, moves, result, props = parse_sgf(path)
+      positions, moves, result, props = oneoff_utils.parse_sgf(path)
     except KeyboardInterrupt:
       raise
-    except:
-      print (path)
-      fail_count+=1
-      print("Fail count: {}".format(fail_count))
+    except Exception as e:
+      fail_count += 1
+      print("Fail {}, while parsing {}: {}".format(fail_count, path, e)
       continue
 
     #add entire game
@@ -278,46 +217,41 @@ def save_plots(data_dir, df):
   plt.savefig(plot_path)
 
 
+def load_checkpoint(save_file, params):
+  loaded, data = oneoff_utils.load_checkpoint(save_file, params)
+  if loaded:
+    seed, df = data
+    with pd.option_context("display.max_rows", 10):
+      print(df)
+  else:
+    seed = np.random.randint(10000)
+    df = pd.DataFrame()
+
+  rand = np.random.RandomState(seed)
+  print (rand.randint(100))
+
+  return df, rand
 
 
 def main(unusedargv):
   data_dir = FLAGS.plot_dir
-  df_save_file = os.path.join(data_dir, "training_curve_df")
-  df_params = [FLAGS.idx_start, FLAGS.eval_every,
+  checkpoint_save_file = os.path.join(data_dir, "training_curve_df")
+  checkpoint_params = [FLAGS.idx_start, FLAGS.eval_every,
                FLAGS.komi, FLAGS.num_positions, FLAGS.sgf_dir]
-  try:
-    with open(df_save_file, "rb") as pickle_file:
-      saved, df, seed = pickle.load(pickle_file)
-      if df_params == saved:
-        with pd.option_context("display.max_rows", 10):
-          print(df)
-      else:
-        print("Can't reuse {} != {}".format(df_params, saved))
-        df = pd.DataFrame()
-  except Exception as e:
-    print ("Exception:", e)
-    seed = np.random.randint(10000)
-    df = pd.DataFrame()
 
-  print ("seed:", seed)
-  rand = np.random.RandomState(seed)
-  print (rand.randint(100))
+  df, rand = load_checkpoint(checkpoint_save_file, checkpoint_params)
 
-  sgf_files = find_and_filter_sgf_files(FLAGS.sgf_dir, FLAGS.min_year, FLAGS.komi)
+  sgf_files = oneoff_utils.find_and_filter_sgf_files(FLAGS.sgf_dir, FLAGS.min_year, FLAGS.komi)
   pos_data, move_data, result_data, move_idxs = sample_positions_from_games(
       rand, sgf_files=sgf_files, num_positions=FLAGS.num_positions)
 
-  df = get_training_curve_data(df, FLAGS.model_dir, pos_data, move_data, result_data, FLAGS.idx_start, eval_every=FLAGS.eval_every)
-  df['num'] = df.num.astype(np.int64)
+  #df = get_training_curve_data(df, FLAGS.model_dir, pos_data, move_data, result_data, FLAGS.idx_start, eval_every=FLAGS.eval_every)
+  #df['num'] = df.num.astype(np.int64)
 
-  try:
-    with open(df_save_file, "wb") as pickle_file:
-      pickle.dump((df_params, df, seed), pickle_file)
-  except:
-    pass
+  # oneoffutils.save_checkpoint(checkpoint_save_file, checkpoint_params, (seed, df))
 
-  print ("Saving plots", data_dir)
-  save_plots(data_dir, df)
+  #print ("Saving plots", data_dir)
+  #save_plots(data_dir, df)
 
 FLAGS = tf.app.flags.FLAGS
 

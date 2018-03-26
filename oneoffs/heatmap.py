@@ -22,6 +22,10 @@ from gtp_wrapper import make_gtp_instance, MCTSPlayer
 from utils import logged_timer as timer
 from tensorflow import gfile
 
+
+tf.app.flags.DEFINE_string(
+    "sgf_dir", "sgf/baduk_db/", "sgf database")
+
 tf.app.flags.DEFINE_string("model_dir", "saved_models",
                            "Where the model files are saved")
 tf.app.flags.DEFINE_string("data_dir", "data/eval", "Where to save data")
@@ -41,6 +45,7 @@ def get_model_paths(model_dir):
         for m in model_filenames]
     model_names = sorted(model_numbers_names)
     return [os.path.join(model_dir, name[1]) for name in model_names]
+
 
 def load_player(model_path):
   print("Loading weights from %s ... " % model_path)
