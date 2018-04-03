@@ -116,7 +116,7 @@ def sample_positions_from_games(rand, sgf_files, num_positions=1):
     if i % 1000 == 0:
       print(i)
     try:
-      positions, moves, result, props = oneoff_utils.parse_sgf(path)
+      positions, moves, result = oneoff_utils.parse_sgf(path)
     except KeyboardInterrupt:
       raise
     except Exception as e:
@@ -248,10 +248,10 @@ def main(unusedargv):
   df = get_training_curve_data(df, FLAGS.model_dir, pos_data, move_data, result_data, FLAGS.idx_start, eval_every=FLAGS.eval_every)
   df['num'] = df.num.astype(np.int64)
 
-  oneoff_utils.save_checkpoint(checkpoint_save_file, checkpoint_params, (seed, df))
-
   print ("Saving plots", data_dir)
   save_plots(data_dir, df)
+
+  oneoff_utils.save_checkpoint(checkpoint_save_file, checkpoint_params, (seed, df))
 
 FLAGS = tf.app.flags.FLAGS
 
