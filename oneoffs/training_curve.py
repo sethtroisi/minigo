@@ -85,6 +85,7 @@ def restore_params(model_path, player):
   with player.network.sess.graph.as_default():
     player.network.initialize_weights(model_path)
 
+
 def batch_run_many(player, positions, batch_size=100):
   """Used to avoid a memory oveflow issue when running the network
   on too many positions. TODO: This should be a member function of
@@ -98,12 +99,14 @@ def batch_run_many(player, positions, batch_size=100):
   return np.concatenate(prob_list, axis=0), np.concatenate(value_list, axis=0)
 
 
-def eval_player(player, positions, moves, results):
+def eval_player(temp_values, player, positions, moves, results):
   probs, values = batch_run_many(player, positions)
   policy_moves = [coords.from_flat(c) for c in np.argmax(probs, axis=1)]
+  temp_values.append((policy_moves, values.tolist()))
   top_move_agree = [moves[idx] == policy_moves[idx] for idx in range(len(moves))]
   square_err = (values - results)**2/4
   return top_move_agree, square_err
+
 
 def sample_positions_from_games(rand, sgf_files, num_positions=1):
   pos_data = []
@@ -116,7 +119,7 @@ def sample_positions_from_games(rand, sgf_files, num_positions=1):
     if i % 1000 == 0:
       print(i)
     try:
-      positions, moves, result = oneoff_utils.parse_sgf(path)
+      positions, moves, results = oneoff_utils.parse_sgf(path)
     except KeyboardInterrupt:
       raise
     except Exception as e:
@@ -129,20 +132,22 @@ def sample_positions_from_games(rand, sgf_files, num_positions=1):
       pos_data.extend(positions)
       move_data.extend(moves)
       move_idxs.extend(range(len(positions)))
-      result_data.extend([result for i in range(len(positions))])
+      result_data.extend(results)
     else:
       for idx in rand.choice(len(positions), num_positions):
         pos_data.append(positions[idx])
         move_data.append(moves[idx])
-        result_data.append(result)
+        result_data.append(results[idx])
         move_idxs.append(idx)
   print("Sampled {} positions, failed to parse {} files".format(len(pos_data), fail_count))
   return pos_data, move_data, result_data, move_idxs
 
 
-def get_training_curve_data(df, model_dir, pos_data, move_data, result_data, idx_start=150, eval_every=10):
+def get_training_curve_data(df, model_dir, pos_data, move_data, result_data, move_idxs, sgf_files, idx_start, eval_every):
   model_paths = get_model_paths(model_dir)
   player=None
+
+  temp_values = [[move_data, result_data, move_idxs, sgf_files]]
 
   print("Evaluating models {}-{}, eval_every={}".format(idx_start, len(model_paths), eval_every))
   for idx in tqdm(range(idx_start, len(model_paths), eval_every)):
@@ -155,14 +160,14 @@ def get_training_curve_data(df, model_dir, pos_data, move_data, result_data, idx
     else:
       player = load_player(model_paths[idx])
 
-    correct, squared_errors = eval_player(player=player, positions=pos_data, moves=move_data, results=result_data)
+    correct, squared_errors = eval_player(temp_values, player=player, positions=pos_data, moves=move_data, results=result_data)
 
     avg_acc = np.mean(correct)
     avg_mse = np.mean(squared_errors)
     print("Model: {}, acc: {:4f}, mse: {:4f}".format(model_paths[idx], avg_acc, avg_mse))
     df = df.append({"num": idx, "acc": avg_acc, "mse": avg_mse}, ignore_index=True)
 
-  return df
+  return df, temp_values
 
 
 def exponential_moving_average(data, alpha = 0.2):
@@ -243,13 +248,19 @@ def main(unusedargv):
 
   sgf_files = oneoff_utils.find_and_filter_sgf_files(FLAGS.sgf_dir, FLAGS.min_year, FLAGS.komi)
   pos_data, move_data, result_data, move_idxs = sample_positions_from_games(
-      rand, sgf_files=sgf_files, num_positions=FLAGS.num_positions)
+      rand, sgf_files, FLAGS.num_positions)
 
-  df = get_training_curve_data(df, FLAGS.model_dir, pos_data, move_data, result_data, FLAGS.idx_start, eval_every=FLAGS.eval_every)
+  df, temp_values = get_training_curve_data(
+    df, FLAGS.model_dir, pos_data, move_data, result_data, move_idxs, sgf_files,
+    FLAGS.idx_start, eval_every=FLAGS.eval_every)
   df['num'] = df.num.astype(np.int64)
 
   print ("Saving plots", data_dir)
   save_plots(data_dir, df)
+
+  pickle_path = os.path.join(data_dir, "test.pickle")
+  with open(pickle_path, 'wb') as handle:
+    pickle.dump(temp_values, handle)
 
   oneoff_utils.save_checkpoint(checkpoint_save_file, checkpoint_params, (seed, df))
 

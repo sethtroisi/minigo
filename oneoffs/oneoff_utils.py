@@ -16,10 +16,8 @@ def parse_sgf(sgf_path):
     with open(sgf_path) as f:
         sgf_contents = f.read()
 
-    positions, moves = zip(*[(p.position, p.next_move)
-                             for p in sgf_wrapper.replay_sgf(sgf_contents)])
-    result = positions[0].result()
-    return positions, moves, result
+    return zip(*[(p.position, p.next_move, p.result)
+                 for p in sgf_wrapper.replay_sgf(sgf_contents)])
 
 
 def check_year(props, year):
