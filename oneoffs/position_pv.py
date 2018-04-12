@@ -66,7 +66,8 @@ def eval_pv(eval_positions, model_dir, data_dir, idx_start, eval_every, readouts
 
         save_file = os.path.join(data_dir, "pv-{}-{}".format(pos_name, idx))
         with open(save_file, "w") as data:
-            data.write("{},  {}\n".format(idx, ",".join(path)))
+            data.write("{},{},  {}\n".format(
+                idx, round(mcts.root.Q,3), ",".join(path)))
 
 
 def positions_from_sgfs(sgf_files):
