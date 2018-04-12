@@ -195,7 +195,7 @@ def save_plots(data_dir, df):
   plot_path = os.path.join(data_dir, "value_mse.png")
   plt.savefig(plot_path)
 
-  df = df.tail(40)
+  df = df.tail(20)
   df = df.reset_index(drop=True)
 
   plt.clf()
