@@ -1,6 +1,6 @@
 """
 Used to plot a heatmap of the policy and value networks.
-Check FLAGS for default values for what models to load.
+Check FLAGS for default values.
 
 Usage:
 python heatmap.py
@@ -33,7 +33,7 @@ tf.app.flags.DEFINE_integer("eval_every", 5,
 FLAGS = tf.app.flags.FLAGS
 
 
-def eval_for_policy(eval_positions, model_dir, data_dir, idx_start, eval_every):
+def eval_policy(eval_positions, model_dir, data_dir, idx_start, eval_every):
   model_paths = oneoff_utils.get_model_paths(model_dir)
 
   print("Evaluating models {}-{}, eval_every={}".format(
@@ -69,7 +69,7 @@ def main(unusedargv):
   sgf_files = oneoff_utils.find_and_filter_sgf_files(FLAGS.sgf_dir)
   eval_positions = positions_from_sgfs(sgf_files)
 
-  eval_for_policy(
+  eval_policy(
       eval_positions,
       FLAGS.model_dir,
       FLAGS.data_dir,

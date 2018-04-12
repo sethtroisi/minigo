@@ -99,10 +99,22 @@ def batch_run_many(player, positions, batch_size=100):
   return np.concatenate(prob_list, axis=0), np.concatenate(value_list, axis=0)
 
 
-def eval_player(temp_values, player, positions, moves, results):
+def eval_player(temp_values, player, model_idx, positions, moves, results):
   probs, values = batch_run_many(player, positions)
+
+  TOP_N = 5
+
+  top_moves = []
+  top_policy = []
+
+  for i in range(len(positions)):
+    top_indexes = np.argsort(probs[i], axis=0)[-TOP_N:][::-1]
+    top_moves.append(top_indexes)
+    top_policy.append(probs[i, top_indexes])
+
+  temp_values.append((model_idx, values.tolist(), top_moves, top_policy))
+
   policy_moves = [coords.from_flat(c) for c in np.argmax(probs, axis=1)]
-  temp_values.append((policy_moves, values.tolist()))
   top_move_agree = [moves[idx] == policy_moves[idx] for idx in range(len(moves))]
   square_err = (values - results)**2/4
   return top_move_agree, square_err
@@ -139,28 +151,43 @@ def sample_positions_from_games(rand, sgf_files, num_positions=1):
         move_data.append(moves[idx])
         result_data.append(results[idx])
         move_idxs.append(idx)
+
   print("Sampled {} positions, failed to parse {} files".format(len(pos_data), fail_count))
   return pos_data, move_data, result_data, move_idxs
 
 
 def get_training_curve_data(df, model_dir, pos_data, move_data, result_data, move_idxs, sgf_files, idx_start, eval_every):
   model_paths = get_model_paths(model_dir)
-  player=None
+  player = None
 
   temp_values = [[move_data, result_data, move_idxs, sgf_files]]
 
   print("Evaluating models {}-{}, eval_every={}".format(idx_start, len(model_paths), eval_every))
+  #import gc
+  #gc.collect()  # don't care about stuff that would be garbage collected properly
+  #import objgraph
+
   for idx in tqdm(range(idx_start, len(model_paths), eval_every)):
     if "num" in df and idx in df["num"].values:
       print ("idx {} already processed => {}".format(idx, df[df['num'] == idx]))
       continue
+
+    if player and idx % 30 == 0:
+      # Each load_player increases memory use by size of the model.
+      # Reset everything everyone in a while to keep all the code running fast.
+      tf.reset_default_graph()
+      player.network.sess.close()
+      player = None
 
     if player:
       restore_params(model_paths[idx], player)
     else:
       player = load_player(model_paths[idx])
 
-    correct, squared_errors = eval_player(temp_values, player=player, positions=pos_data, moves=move_data, results=result_data)
+    correct, squared_errors = eval_player(temp_values, player, idx, pos_data, move_data, result_data)
+
+    #print (objgraph.show_growth(limit = 10))
+    #objgraph.show_chain(objgraph.find_backref_chain(objgraph.by_type('tuple'), objgraph.is_proper_module))
 
     avg_acc = np.mean(correct)
     avg_mse = np.mean(squared_errors)
@@ -252,7 +279,7 @@ def main(unusedargv):
 
   df, temp_values = get_training_curve_data(
     df, FLAGS.model_dir, pos_data, move_data, result_data, move_idxs, sgf_files,
-    FLAGS.idx_start, eval_every=FLAGS.eval_every)
+    FLAGS.idx_start, FLAGS.eval_every)
   df['num'] = df.num.astype(np.int64)
 
   print ("Saving plots", data_dir)
