@@ -62,30 +62,6 @@ tf.app.flags.DEFINE_integer("eval_every", 5,
 FLAGS = tf.app.flags.FLAGS
 
 
-def get_model_paths(model_dir):
-    '''Returns all model paths in the model_dir.'''
-    all_models = gfile.Glob(os.path.join(model_dir, '*.meta'))
-    model_filenames = [os.path.basename(m) for m in all_models]
-    model_numbers_names = [
-        (shipname.detect_model_num(m), shipname.detect_model_name(m))
-        for m in model_filenames]
-    model_names = sorted(model_numbers_names)
-    return [os.path.join(model_dir, name[1]) for name in model_names]
-
-def load_player(model_path):
-  print("Loading weights from %s ... " % model_path)
-  with timer("Loading weights from %s ... " % model_path):
-      network = dual_net.DualNetwork(model_path)
-      network.name = os.path.basename(model_path)
-  player = MCTSPlayer(network, verbosity=2)
-  return player
-
-
-def restore_params(model_path, player):
-  with player.network.sess.graph.as_default():
-    player.network.initialize_weights(model_path)
-
-
 def batch_run_many(player, positions, batch_size=100):
   """Used to avoid a memory oveflow issue when running the network
   on too many positions. TODO: This should be a member function of
@@ -157,15 +133,12 @@ def sample_positions_from_games(rand, sgf_files, num_positions=1):
 
 
 def get_training_curve_data(df, model_dir, pos_data, move_data, result_data, move_idxs, sgf_files, idx_start, eval_every):
-  model_paths = get_model_paths(model_dir)
+  model_paths = oneoff_utils.get_model_paths(model_dir)
   player = None
 
   temp_values = [[move_data, result_data, move_idxs, sgf_files]]
 
   print("Evaluating models {}-{}, eval_every={}".format(idx_start, len(model_paths), eval_every))
-  #import gc
-  #gc.collect()  # don't care about stuff that would be garbage collected properly
-  #import objgraph
 
   for idx in tqdm(range(idx_start, len(model_paths), eval_every)):
     if "num" in df and idx in df["num"].values:
@@ -180,14 +153,11 @@ def get_training_curve_data(df, model_dir, pos_data, move_data, result_data, mov
       player = None
 
     if player:
-      restore_params(model_paths[idx], player)
+      oneoff_utils.restore_params(model_paths[idx], player)
     else:
-      player = load_player(model_paths[idx])
+      player = oneoff_utils.load_player(model_paths[idx])
 
     correct, squared_errors = eval_player(temp_values, player, idx, pos_data, move_data, result_data)
-
-    #print (objgraph.show_growth(limit = 10))
-    #objgraph.show_chain(objgraph.find_backref_chain(objgraph.by_type('tuple'), objgraph.is_proper_module))
 
     avg_acc = np.mean(correct)
     avg_mse = np.mean(squared_errors)
