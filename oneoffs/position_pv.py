@@ -54,6 +54,10 @@ def eval_pv(eval_positions, model_dir, data_dir, idx_start, eval_every, readouts
 
     eval_trees = []
     for pos_name, position in eval_positions:
+        save_file = os.path.join(data_dir, "pv-{}-{}".format(pos_name, idx))
+        if os.path.exists(save_file) and os.stat(save_file).st_size > 0:
+            continue
+
         mcts.initialize_game(position)
         mcts.suggest_move(position)
 
@@ -64,7 +68,6 @@ def eval_pv(eval_positions, model_dir, data_dir, idx_start, eval_every, readouts
             node = node.children.get(next_kid)
             path.append("{},{}".format(node.fmove, int(node.N)))
 
-        save_file = os.path.join(data_dir, "pv-{}-{}".format(pos_name, idx))
         with open(save_file, "w") as data:
             data.write("{},{},  {}\n".format(
                 idx, round(mcts.root.Q,3), ",".join(path)))
