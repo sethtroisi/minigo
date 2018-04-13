@@ -24,6 +24,7 @@ import sys
 import tempfile
 import time
 import cloud_logging
+import multiprocessing
 from tqdm import tqdm
 import gzip
 import numpy as np
@@ -186,6 +187,35 @@ def selfplay(
     preprocessing.write_tf_examples(fname, tf_examples)
 
 
+def _create_tfr(data):
+    preprocessing.make_dataset_from_sgf(data[0], data[1])
+
+def preprocess(
+    source_dir: "where to look for games" = "sgf/",
+    save_dir: 'where to look for games'='data/records',
+    threads: 'How many threads to use'=1):
+    assert source_dir and os.path.exists(source_dir), source_dir
+    _ensure_dir_exists(save_dir)
+
+    files = []
+    for i, (dirpath, dirnames, filenames) in enumerate(tqdm(os.walk(source_dir))):
+        for filename in filenames:
+            if filename.endswith('.sgf'):
+                files.append((
+                    os.path.join(dirpath, filename),
+                    os.path.join(save_dir, "supervised_{}.tfrecord.zz".format(i))
+                ))
+
+    print ("Found {} SGFs".format(len(files)))
+
+    if threads <= 1:
+        for i, data in enumerate(tqdm(files)):
+            _create_tfr(data)
+    else:
+        with multiprocessing.Pool(threads) as p:
+            list(tqdm(p.imap(_create_tfr, files), total=len(files)))
+
+
 def gather(
         input_directory: 'where to look for games'='data/selfplay/',
         output_directory: 'where to put collected games'='data/training_chunks/',
@@ -232,7 +262,8 @@ def gather(
 
 parser = argparse.ArgumentParser()
 argh.add_commands(parser, [gtp, bootstrap, train,
-                           selfplay, gather, evaluate, validate])
+                           selfplay, gather, evaluate,
+                           validate, preprocess])
 
 if __name__ == '__main__':
     cloud_logging.configure()
