@@ -30,7 +30,7 @@ TF_RECORD_CONFIG = tf.python_io.TFRecordOptions(
 # where it started; this and the interleave parameters in preprocessing can give
 # us an approximation of a uniform sampling.  The default of 4M is used in
 # training, but smaller numbers can be used for aggregation or validation.
-SHUFFLE_BUFFER_SIZE = int(2*1e6)
+SHUFFLE_BUFFER_SIZE = int(2e5)
 
 # Constructing tf.Examples
 
@@ -161,6 +161,7 @@ def get_input_tensors(batch_size, tf_records, num_repeats=None,
     '''
     if shuffle_buffer_size is None:
         shuffle_buffer_size = SHUFFLE_BUFFER_SIZE
+    print ("Reading {} tf_records for input".format(len(tf_records)))
     dataset = read_tf_records(batch_size, tf_records, num_repeats=num_repeats,
                               shuffle_records=shuffle_records,
                               shuffle_examples=shuffle_examples,
@@ -169,6 +170,7 @@ def get_input_tensors(batch_size, tf_records, num_repeats=None,
     dataset = dataset.filter(lambda t: tf.equal(tf.shape(t)[0], batch_size))
     dataset = dataset.map(functools.partial(
         batch_parse_tf_example, batch_size))
+    print ("Read {} tf_records for input".format(len(tf_records)))
     return dataset.make_one_shot_iterator().get_next()
 
 # End-to-end utility functions
