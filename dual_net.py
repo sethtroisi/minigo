@@ -69,7 +69,7 @@ class DualNetwork():
     def initialize_weights(self, save_file):
         """Initialize the weights from the given save_file.
         Assumes that the graph has been constructed, and the
-        save_file contains weights that match the graph. Used 
+        save_file contains weights that match the graph. Used
         to set the weights to a different version of the player
         without redifining the entire graph."""
         tf.train.Saver().restore(self.sess, save_file)
@@ -125,11 +125,11 @@ def get_default_hyperparams(**overrides):
       l2_strength: The L2 regularization parameter.
       momentum: The momentum parameter for training
     """
-    k = _round_power_of_two(go.N ** 2 / 3)  # width of each layer
+    filters = 32
     hparams = {
-        'k': k,  # Width of each conv layer
-        'fc_width': 2 * k,  # Width of each fully connected layer
-        'num_shared_layers': go.N,  # Number of shared trunk layers
+        'k': filters,  # Width of each conv layer
+        'fc_width': 2 * filters,  # Width of each fully connected layer
+        'num_shared_layers': 5,  # Number of shared trunk layers
         'l2_strength': 1e-4,  # Regularization strength
         'momentum': 0.9,  # Momentum used in SGD
     }

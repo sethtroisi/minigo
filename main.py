@@ -188,7 +188,10 @@ def selfplay(
 
 
 def _create_tfr(data):
-    preprocessing.make_dataset_from_sgf(data[0], data[1])
+    try:
+        preprocessing.make_dataset_from_sgf(data[0], data[1])
+    except Exception as e:
+        print (data[0], e)
 
 def preprocess(
     source_dir: "where to look for games" = "sgf/",
