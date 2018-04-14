@@ -223,7 +223,7 @@ def save_plots(data_dir, df):
   plt.xlabel("Model idx")
   plt.ylabel("Accuracy")
   plt.title("Accuracy in Predicting Professional Moves")
-  plot_path = os.sep.join([data_dir, "move_acc.pdf"])
+  plot_path = os.sep.join([data_dir, "move_acc.png"])
   plt.savefig(plot_path)
 
   plt.figure()
@@ -232,7 +232,7 @@ def save_plots(data_dir, df):
   plt.xlabel("Model idx")
   plt.ylabel("MSE/4")
   plt.title("MSE in predicting outcome")
-  plot_path = os.sep.join([data_dir, "value_mse.pdf"])
+  plot_path = os.sep.join([data_dir, "value_mse.png"])
   plt.savefig(plot_path)
 
 def main(unusedargv):

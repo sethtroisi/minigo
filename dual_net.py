@@ -37,10 +37,10 @@ import go
 
 # How many positions to look at per generation.
 # Per AGZ, 2048 minibatch * 1k = 2M positions/generation
-EXAMPLES_PER_GENERATION = 2000000
+EXAMPLES_PER_GENERATION = 100000
 
 # How many positions can fit on a graphics card. 256 for 9s, 16 or 32 for 19s.
-TRAIN_BATCH_SIZE = 16
+TRAIN_BATCH_SIZE = 32
 
 
 class DualNetwork():
@@ -125,13 +125,14 @@ def get_default_hyperparams(**overrides):
       l2_strength: The L2 regularization parameter.
       momentum: The momentum parameter for training
     """
-    filters = 32
+    layers = 10
+    filters = 64
     hparams = {
-        'k': filters,  # Width of each conv layer
-        'fc_width': 2 * filters,  # Width of each fully connected layer
-        'num_shared_layers': 5,  # Number of shared trunk layers
-        'l2_strength': 1e-4,  # Regularization strength
-        'momentum': 0.9,  # Momentum used in SGD
+        'k': filters,                     # Width of each conv layer
+        'fc_width': 2 * filters,          # Width of each fully connected layer
+        'num_shared_layers': layers - 1,  # Number of shared trunk layers
+        'l2_strength': 1e-4,              # Regularization strength
+        'momentum': 0.9,                  # Momentum used in SGD
     }
     hparams.update(**overrides)
     return hparams
@@ -311,10 +312,12 @@ def train(working_dir, tf_records, generation_num, **hparams):
     estimator = get_estimator(working_dir, **hparams)
     max_steps = generation_num * EXAMPLES_PER_GENERATION // TRAIN_BATCH_SIZE
 
+    print ("Training, max_steps = {}".format(max_steps))
+
     def input_fn(): return preprocessing.get_input_tensors(
-        TRAIN_BATCH_SIZE, tf_records)
-    update_ratio_hook = UpdateRatioSessionHook(working_dir)
-    estimator.train(input_fn, hooks=[update_ratio_hook], max_steps=max_steps)
+        TRAIN_BATCH_SIZE, tf_records, filter_amount=1.0)
+    step_counter_hook = EchoStepCounterHook(output_dir=working_dir)
+    estimator.train(input_fn, hooks=[step_counter_hook], max_steps=max_steps)
 
 
 def validate(working_dir, tf_records, checkpoint_name=None, **hparams):
@@ -340,6 +343,13 @@ def compute_update_ratio(weight_tensors, before_weights, after_weights):
                          tensor.name, simple_value=ratio)
         for tensor, ratio in zip(weight_tensors, ratios)]
     return tf.Summary(value=all_summaries)
+
+
+class EchoStepCounterHook(tf.train.StepCounterHook):
+    def _log_and_record(self, elapsed_steps, elapsed_time, global_step):
+        s_per_sec = elapsed_steps / elapsed_time
+        print("{:.3f} steps per second".format(s_per_sec))
+        super()._log_and_record(elapsed_steps, elapsed_time, global_step)
 
 
 class UpdateRatioSessionHook(tf.train.SessionRunHook):

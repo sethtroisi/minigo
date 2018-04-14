@@ -101,7 +101,7 @@ def train(
         model_save_path: 'Where to export the completed generation.',
         generation_num: 'Which generation you are training.'=0):
     tf_records = sorted(gfile.Glob(os.path.join(chunk_dir, '*.tfrecord.zz')))
-    tf_records = tf_records[-1 * (WINDOW_SIZE // EXAMPLES_PER_RECORD):]
+    #tf_records = tf_records[-1 * (WINDOW_SIZE // EXAMPLES_PER_RECORD):]
 
     print("Training from:", tf_records[0], "to", tf_records[-1])
 
@@ -201,12 +201,12 @@ def preprocess(
     _ensure_dir_exists(save_dir)
 
     files = []
-    for i, (dirpath, dirnames, filenames) in enumerate(tqdm(os.walk(source_dir))):
+    for dirpath, dirnames, filenames in os.walk(source_dir):
         for filename in filenames:
             if filename.endswith('.sgf'):
                 files.append((
                     os.path.join(dirpath, filename),
-                    os.path.join(save_dir, "supervised_{}.tfrecord.zz".format(i))
+                    os.path.join(save_dir, "supervised_{}.tfrecord.zz".format(len(files)))
                 ))
 
     print ("Found {} SGFs".format(len(files)))
