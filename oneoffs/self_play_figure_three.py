@@ -140,7 +140,7 @@ def get_training_curve_data(df, model_dir, idx_start, eval_every):
         else:
             player = oneoff_utils.load_player(model_paths[idx])
 
-        pos_data, move_data, result_data = sample_positions_from_self_play(idx - 1)
+        pos_data, move_data, result_data = sample_positions_from_self_play(idx - 5)
 
         correct, squared_errors = eval_player(
             player, idx, pos_data, move_data, result_data)
@@ -170,6 +170,8 @@ def save_plots(data_dir, df):
     plt.xlabel("Model idx")
     plt.ylabel("Accuracy")
     plt.title("Accuracy in Predicting Self Play Moves")
+    ax = plt.gca()
+    ax.set_ylim([0, 0.7])
     plot_path = os.path.join(data_dir, "move_acc.png")
     plt.savefig(plot_path)
 
@@ -179,6 +181,8 @@ def save_plots(data_dir, df):
     plt.plot(df["num"], exponential_moving_average(df["mse"]))
     plt.xlabel("Model idx")
     plt.ylabel("MSE/4")
+    ax = plt.gca()
+    ax.set_ylim([0.15, 0.35])
     plt.title("MSE in predicting self play outcome")
     plot_path = os.path.join(data_dir, "value_mse.png")
     plt.savefig(plot_path)
@@ -192,6 +196,8 @@ def save_plots(data_dir, df):
     plt.plot(df["num"], exponential_moving_average(df["acc"]))
     plt.xlabel("Model idx")
     plt.ylabel("Accuracy")
+    ax = plt.gca()
+    ax.set_ylim([0, 0.7])
     plt.title("Accuracy in Predicting Self Play Moves")
     plot_path = os.path.join(data_dir, "move_acc2.png")
     plt.savefig(plot_path)
@@ -202,6 +208,8 @@ def save_plots(data_dir, df):
     plt.plot(df["num"], exponential_moving_average(df["mse"]))
     plt.xlabel("Model idx")
     plt.ylabel("MSE/4")
+    ax = plt.gca()
+    ax.set_ylim([0.15, 0.35])
     plt.title("MSE in predicting self play outcome")
     plot_path = os.path.join(data_dir, "value_mse2.png")
     plt.savefig(plot_path)

@@ -75,8 +75,11 @@ def eval_pv(eval_positions, model_dir, data_dir, idx_start, eval_every, readouts
             path.append("{},{}".format(node.fmove, int(node.N)))
 
         with open(save_file, "w") as data:
+            next_kid = np.argmax(mcts.root.child_N)
             data.write("{},{},  {}\n".format(
-                idx, round(mcts.root.Q,3), ",".join(path)))
+                idx,
+                round(mcts.root.child_action_score[next_kid],2),
+                ",".join(path)))
 
 
 def positions_from_sgfs(sgf_files):

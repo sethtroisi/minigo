@@ -182,6 +182,8 @@ def save_plots(data_dir, df):
   plt.xlabel("Model idx")
   plt.ylabel("Accuracy")
   plt.title("Accuracy in Predicting Professional Moves")
+  ax = plt.gca()
+  ax.set_ylim([0, 0.7])
   plot_path = os.path.join(data_dir, "move_acc.png")
   plt.savefig(plot_path)
 
@@ -192,6 +194,8 @@ def save_plots(data_dir, df):
   plt.xlabel("Model idx")
   plt.ylabel("MSE/4")
   plt.title("MSE in predicting outcome")
+  ax = plt.gca()
+  ax.set_ylim([0.15, 0.35])
   plot_path = os.path.join(data_dir, "value_mse.png")
   plt.savefig(plot_path)
 
@@ -205,6 +209,8 @@ def save_plots(data_dir, df):
   plt.xlabel("Model idx")
   plt.ylabel("Accuracy")
   plt.title("Accuracy in Predicting Professional Moves")
+  ax = plt.gca()
+  ax.set_ylim([0.4, 0.5])
   plot_path = os.path.join(data_dir, "move_acc2.png")
   plt.savefig(plot_path)
 
@@ -215,6 +221,8 @@ def save_plots(data_dir, df):
   plt.xlabel("Model idx")
   plt.ylabel("MSE/4")
   plt.title("MSE in predicting outcome")
+  ax = plt.gca()
+  ax.set_ylim([0.20, 0.30])
   plot_path = os.path.join(data_dir, "value_mse2.png")
   plt.savefig(plot_path)
 
