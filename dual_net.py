@@ -311,14 +311,12 @@ def train(working_dir, tf_records, generation_num, steps=None, **hparams):
     def input_fn(): return preprocessing.get_input_tensors(
         TRAIN_BATCH_SIZE, tf_records, filter_amount=1.0)
 
-    update_ratio_hook = UpdateRatioSessionHook(working_dir)
     step_counter_hook = EchoStepCounterHook(output_dir=working_dir)
 
     max_steps = generation_num * EXAMPLES_PER_GENERATION // TRAIN_BATCH_SIZE
     print ("Training, max_steps = {}".format(max_steps))
 
-    estimator.train(input_fn, hooks=[
-                        update_ratio_hook, step_counter_hook], max_steps=max_steps)
+    estimator.train(input_fn, hooks=[step_counter_hook], max_steps=max_steps)
 
 
 def validate(working_dir, tf_records, checkpoint_name=None, **hparams):
@@ -332,51 +330,8 @@ def validate(working_dir, tf_records, checkpoint_name=None, **hparams):
     estimator.evaluate(input_fn, steps=1000)
 
 
-def compute_update_ratio(weight_tensors, before_weights, after_weights):
-    """Compute the ratio of gradient norm to weight norm."""
-    deltas = [after - before for after,
-              before in zip(after_weights, before_weights)]
-    delta_norms = [np.linalg.norm(d.ravel()) for d in deltas]
-    weight_norms = [np.linalg.norm(w.ravel()) for w in before_weights]
-    ratios = [d / w for d, w in zip(delta_norms, weight_norms)]
-    all_summaries = [
-        tf.Summary.Value(tag='update_ratios/' +
-                         tensor.name, simple_value=ratio)
-        for tensor, ratio in zip(weight_tensors, ratios)]
-    return tf.Summary(value=all_summaries)
-
-
 class EchoStepCounterHook(tf.train.StepCounterHook):
     def _log_and_record(self, elapsed_steps, elapsed_time, global_step):
         s_per_sec = elapsed_steps / elapsed_time
         print("{:.3f} steps per second".format(s_per_sec))
         super()._log_and_record(elapsed_steps, elapsed_time, global_step)
-
-
-class UpdateRatioSessionHook(tf.train.SessionRunHook):
-    def __init__(self, working_dir, every_n_steps=100):
-        self.working_dir = working_dir
-        self.every_n_steps = every_n_steps
-
-    def begin(self):
-        # These calls only works because the SessionRunHook api guarantees this
-        # will get called within a graph context containing our model graph.
-
-        self.summary_writer = SummaryWriterCache.get(self.working_dir)
-        self.weight_tensors = tf.trainable_variables()
-        self.global_step = tf.train.get_or_create_global_step()
-
-    def before_run(self, run_context):
-        global_step = run_context.session.run(self.global_step)
-        if global_step % self.every_n_steps == 0:
-            self.before_weights = run_context.session.run(self.weight_tensors)
-
-    def after_run(self, run_context, run_values):
-        global_step = run_context.session.run(self.global_step)
-        if global_step % self.every_n_steps == 0:
-            after_weights = run_context.session.run(self.weight_tensors)
-            weight_update_summaries = compute_update_ratio(
-                self.weight_tensors, self.before_weights, after_weights)
-            self.summary_writer.add_summary(
-                weight_update_summaries, global_step)
-            self.before_weights = None

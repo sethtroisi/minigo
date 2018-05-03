@@ -47,7 +47,8 @@ def supervised():
     #monkeypatch the shuffle buffer size so we don't spin forever shuffling up positions.
     #preprocessing.SHUFFLE_BUFFER_SIZE = 1000
 
-    pro_data = "data/records"
+    pro_dir = "data/records"
+    holdout_dir = "data/holdouts"
 
     base_dir = "supervised/{}-{}-{}/".format(layers, filters, machine)
     working_dir = os.path.join(base_dir, 'models_in_training')
@@ -65,10 +66,10 @@ def supervised():
             generation, layers, filters, machine)
         print("Training {}!".format(model_name))
         model_save_path = os.path.join(model_dir, model_name)
-        main.train(working_dir, pro_data, model_save_path, generation_num=generation)
+        main.train_dir(working_dir, pro_dir, model_save_path, generation_num=generation)
 
-        #print("Trying validate on 'holdout' game...")
-        #main.validate(working_dir, holdout_dir)
+        print("Validate on 'holdout' data")
+        main.validate(working_dir, holdout_dir, checkpoint_name=model_save_path, validate_name="test")
 
 
 if __name__ == '__main__':
