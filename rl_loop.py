@@ -15,18 +15,22 @@
 """Wrapper scripts to ensure that main.py commands are called correctly."""
 import argh
 import argparse
-import cloud_logging
 import logging
 import os
 import main
 import shipname
 import sys
 import time
+import tempfile
 from utils import timer
+
+from absl import flags
+import cloud_logging
 from tensorflow import gfile
 
 # Pull in environment variables. Run `source ./cluster/common` to set these.
 BUCKET_NAME = os.environ['BUCKET_NAME']
+BOARD_SIZE = os.environ['BOARD_SIZE']
 
 BASE_DIR = "gs://{}".format(BUCKET_NAME)
 MODELS_DIR = os.path.join(BASE_DIR, 'models')
@@ -34,11 +38,15 @@ SELFPLAY_DIR = os.path.join(BASE_DIR, 'data/selfplay')
 HOLDOUT_DIR = os.path.join(BASE_DIR, 'data/holdout')
 SGF_DIR = os.path.join(BASE_DIR, 'sgf')
 TRAINING_CHUNK_DIR = os.path.join(BASE_DIR, 'data', 'training_chunks')
+GOLDEN_CHUNK_DIR = os.path.join(BASE_DIR, 'data', 'golden_chunks')
 
 ESTIMATOR_WORKING_DIR = 'estimator_working_dir'
 
 # How many games before the selfplay workers will stop trying to play more.
 MAX_GAMES_PER_GENERATION = 10000
+
+# How many games minimum, until the trainer will train
+MIN_GAMES_PER_GENERATION = 500
 
 # What percent of games to holdout from training per generation
 HOLDOUT_PCT = 0.05
@@ -54,6 +62,7 @@ def print_flags():
         'SGF_DIR': SGF_DIR,
         'TRAINING_CHUNK_DIR': TRAINING_CHUNK_DIR,
         'ESTIMATOR_WORKING_DIR': ESTIMATOR_WORKING_DIR,
+        'BOARD_SIZE': BOARD_SIZE,
     }
     print("Computed variables are:")
     print('\n'.join('--{}={}'.format(flag, value)
@@ -107,7 +116,7 @@ def bootstrap():
     main.bootstrap(ESTIMATOR_WORKING_DIR, bootstrap_model_path)
 
 
-def selfplay(readouts=1600, verbose=2, resign_threshold=0.99):
+def selfplay(readouts=1600, verbose=2):
     _, model_name = get_latest_model()
     games = gfile.Glob(os.path.join(SELFPLAY_DIR, model_name, '*.zz'))
     if len(games) > MAX_GAMES_PER_GENERATION:
@@ -126,29 +135,40 @@ def selfplay(readouts=1600, verbose=2, resign_threshold=0.99):
         output_sgf=sgf_dir,
         readouts=readouts,
         holdout_pct=HOLDOUT_PCT,
-        resign_threshold=resign_threshold,
         verbose=verbose,
     )
 
 
-def gather():
-    print("Gathering game output...")
-    main.gather(input_directory=SELFPLAY_DIR,
-                output_directory=TRAINING_CHUNK_DIR)
 
-
-def train():
+def train(load_dir=MODELS_DIR, save_dir=MODELS_DIR):
     model_num, model_name = get_latest_model()
+
+    games = gfile.Glob(os.path.join(SELFPLAY_DIR, model_name, '*.zz'))
+    if len(games) < MIN_GAMES_PER_GENERATION:
+        print("{} doesn't have enough games to train a new model yet ({})".format(
+            model_name, len(games)))
+        print("Sleeping...")
+        time.sleep(10*60)
+        print("Done...")
+        sys.exit(1)
+
     print("Training on gathered game data, initializing from {}".format(model_name))
-    new_model_name = shipname.generate(model_num + 1)
+    new_model_num = model_num + 1
+    new_model_name = shipname.generate(new_model_num)
     print("New model will be {}".format(new_model_name))
-    load_file = os.path.join(MODELS_DIR, model_name)
-    save_file = os.path.join(MODELS_DIR, new_model_name)
+    training_file = os.path.join(
+        GOLDEN_CHUNK_DIR, str(new_model_num) + '.tfrecord.zz')
+    while not gfile.Exists(training_file):
+        print("Waiting for", training_file)
+        time.sleep(1*60)
+    print("Using Golden File:", training_file)
+
+    load_file = os.path.join(load_dir, model_name)
+    save_file = os.path.join(save_dir, new_model_name)
     try:
-        main.train(ESTIMATOR_WORKING_DIR, TRAINING_CHUNK_DIR, save_file,
+        main.train(ESTIMATOR_WORKING_DIR, [training_file], save_file,
                    generation_num=model_num + 1)
     except:
-        print("Got an error training, muddling on...")
         logging.exception("Train error")
 
 
@@ -177,16 +197,40 @@ def validate(model_num=None, validate_name=None):
                   validate_name=validate_name)
 
 
+def backfill():
+    models = [m[1] for m in get_models()]
+
+    import dual_net
+    import tensorflow as tf
+    from tqdm import tqdm
+    from tensorflow.python.framework import meta_graph
+    features, labels = dual_net.get_inference_input()
+    dual_net.model_fn(features, labels, tf.estimator.ModeKeys.PREDICT,
+                      dual_net.get_default_hyperparams())
+
+    for model_name in tqdm(models):
+        if model_name.endswith('-upgrade'):
+            continue
+        try:
+            load_file = os.path.join(MODELS_DIR, model_name)
+            dest_file = os.path.join(MODELS_DIR, model_name)
+            main.convert(load_file, dest_file)
+        except:
+            print('failed on', model_name)
+            continue
+
+
 def echo():
     pass  # Flags are echo'd in the ifmain block below.
 
 
 parser = argparse.ArgumentParser()
 
-argh.add_commands(parser, [train, selfplay, gather,
-                           bootstrap, game_counts, validate, echo])
+argh.add_commands(parser, [train, selfplay, echo, backfill,
+                           bootstrap, game_counts, validate])
 
 if __name__ == '__main__':
     print_flags()
     cloud_logging.configure()
-    argh.dispatch(parser)
+    remaining_argv = flags.FLAGS(sys.argv, known_only=True)
+    argh.dispatch(parser, argv=remaining_argv[1:])
