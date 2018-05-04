@@ -129,6 +129,7 @@ def get_default_hyperparams(**overrides):
         'num_shared_layers': layers - 1,  # Number of shared trunk layers
         'l2_strength': 1e-4,              # Regularization strength
         'momentum': 0.9,                  # Momentum used in SGD
+        'value_head_loss_scalar': 1       # Scalar for Value head loss used with supervised learning
     }
     hparams.update(**overrides)
     return hparams
@@ -210,7 +211,7 @@ def model_fn(features, labels, mode, params, config=None):
         tf.square(value_output - labels['value_tensor']))
     l2_cost = params['l2_strength'] * tf.add_n([tf.nn.l2_loss(v)
                                                 for v in tf.trainable_variables() if not 'bias' in v.name])
-    combined_cost = policy_cost + 0.01 * value_cost + l2_cost
+    combined_cost = policy_cost + value_head_loss_scalar * value_cost + l2_cost
     policy_entropy = -tf.reduce_mean(tf.reduce_sum(
         policy_output * tf.log(policy_output), axis=1))
     boundaries = [40 * int(1e6), 80 * int(1e6)]
@@ -333,5 +334,5 @@ def validate(working_dir, tf_records, checkpoint_name=None, **hparams):
 class EchoStepCounterHook(tf.train.StepCounterHook):
     def _log_and_record(self, elapsed_steps, elapsed_time, global_step):
         s_per_sec = elapsed_steps / elapsed_time
-        print("{:.3f} steps per second".format(s_per_sec))
+        print("{}: {:.3f} steps per second".format(global_step, s_per_sec))
         super()._log_and_record(elapsed_steps, elapsed_time, global_step)

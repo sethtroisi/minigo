@@ -29,8 +29,13 @@ def supervised():
     the reinforcement learning.
     """
 
-    assert len(sys.argv) == 4, ("Three Args: layers, filters, machine | got:", sys.argv[1:])
-    layers, filters, machine = map(int, sys.argv[1:])
+    assert len(sys.argv) >= 4, ("Three Args: layers, filters, machine | got:", sys.argv[1:])
+    layers, filters, machine = map(int, sys.argv[1:4])
+
+    value_mult = 1.0
+    if len(sys.argv) >= 5:
+        value_mult = float(sys.argv[4])
+
 
     # monkeypatch the hyperparams so that we get a quickly executing network.
     hyperparams = dual_net.get_default_hyperparams()
@@ -38,6 +43,7 @@ def supervised():
         'num_shared_layers': layers,
         'k': filters,
         'fc_width': 2 * filters,
+        'value_head_loss_scalar': value_mult
     })
     dual_net.get_default_hyperparams = lambda: hyperparams
 
@@ -45,12 +51,16 @@ def supervised():
     #dual_net.EXAMPLES_PER_GENERATION = 64
 
     #monkeypatch the shuffle buffer size so we don't spin forever shuffling up positions.
-    #preprocessing.SHUFFLE_BUFFER_SIZE = 1000
+    preprocessing.SHUFFLE_BUFFER_SIZE = 300000
 
     pro_dir = "data/records"
     holdout_dir = "data/holdouts"
 
-    base_dir = "supervised/{}-{}-{}/".format(layers, filters, machine)
+    name = "{}-{}-{}".format(layers, filters, machine)
+    if value_mult != 1.0:
+        name = "{}-{}-{}-{}".format(layers, filters, int(value_mult * 100), machine)
+
+    base_dir = "supervised/{}/".format(name)
     working_dir = os.path.join(base_dir, 'models_in_training')
     model_dir = os.path.join(base_dir, 'models')
     os.makedirs(base_dir)
