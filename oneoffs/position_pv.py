@@ -64,7 +64,7 @@ def eval_pv(eval_positions):
 
         eval_trees = []
         for name, position in eval_positions:
-            save_file = os.path.join(data_dir, "pv-{}-{}".format(pos_name, idx))
+            save_file = os.path.join(FLAGS.data_dir, "pv-{}-{}.csv".format(name, idx))
             if os.path.exists(save_file) and os.stat(save_file).st_size > 0:
                 continue
 
@@ -78,8 +78,6 @@ def eval_pv(eval_positions):
                 node = node.children.get(next_kid)
                 path.append("{},{}".format(node.fmove, int(node.N)))
 
-            save_file = os.path.join(
-                FLAGS.data_dir, "pv-{}-{}".format(name, idx))
             with open(save_file, "w") as data:
                 next_kid = np.argmax(mcts.root.child_N)
                 data.write("{},{},  {}\n".format(

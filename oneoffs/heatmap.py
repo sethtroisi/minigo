@@ -33,7 +33,7 @@ tf.app.flags.DEFINE_integer("eval_every", 5,
 
 FLAGS = tf.app.flags.FLAGS
 
-def eval_policy(eval_positions)
+def eval_policy(eval_positions):
     """Evaluate all positions with all models save the policy heatmaps as CSVs
 
     CSV name is "heatmap-<position_name>-<model-index>.csv"
