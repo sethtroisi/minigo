@@ -180,7 +180,7 @@ def preprocess(
     save_dir: 'where to look for games'='data/records',
     threads: 'How many threads to use'=1):
     assert source_dir and os.path.exists(source_dir), source_dir
-    _ensure_dir_exists(save_dir)
+    utils.ensure_dir_exists(save_dir)
 
     files = []
     for dirpath, dirnames, filenames in os.walk(source_dir):
