@@ -6,11 +6,13 @@ Usage:
 python position_pv.py
 
 """
-import sys; sys.path.insert(0, '.')
+import sys
+sys.path.insert(0, '.')
 
 import itertools
 import os
 
+from absl import app, flags
 import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
@@ -20,93 +22,89 @@ import strategies
 import oneoff_utils
 
 
-tf.app.flags.DEFINE_string(
+flags.DEFINE_string(
     "sgf_dir", "sgf/baduk_db/", "sgf database")
 
-tf.app.flags.DEFINE_string("model_dir", "saved_models",
-                           "Where the model files are saved")
-tf.app.flags.DEFINE_string("data_dir", "data/eval", "Where to save data")
-tf.app.flags.DEFINE_integer("idx_start", 150,
-                            "Only take models after given idx")
-tf.app.flags.DEFINE_integer("eval_every", 5,
-                            "Eval every k models to generate the curve")
-tf.app.flags.DEFINE_integer("readouts", 1000,
-                            "Eval every k models to generate the curve")
+flags.DEFINE_string("model_dir", "saved_models",
+                    "Where the model files are saved")
+flags.DEFINE_string("data_dir", "data/eval", "Where to save data")
+flags.DEFINE_integer("idx_start", 150,
+                     "Only take models after given idx")
+flags.DEFINE_integer("eval_every", 5,
+                     "Eval every k models to generate the curve")
+#tf.app.flags.DEFINE_integer("readouts", 1000,
+#                            "Eval every k models to generate the curve")
 
-FLAGS = tf.app.flags.FLAGS
+FLAGS = flags.FLAGS
 
 
-def eval_pv(eval_positions, model_dir, data_dir, idx_start, eval_every, readouts):
-  model_paths = oneoff_utils.get_model_paths(model_dir)
+def eval_pv(eval_positions):
+    model_paths = oneoff_utils.get_model_paths(FLAGS.model_dir)
 
-  print("Evaluating models {}-{}, eval_every={}".format(
-        idx_start, len(model_paths), eval_every))
-  player = None
-  for i, idx in enumerate(tqdm(range(idx_start, len(model_paths), eval_every))):
-    if player and i % 20 == 0:
-      player.network.sess.close()
-      tf.reset_default_graph()
-      player = None
+    idx_start = FLAGS.idx_start
+    eval_every = FLAGS.eval_every
 
-    if not player:
-      player = oneoff_utils.load_player(model_paths[idx])
-    else:
-      oneoff_utils.restore_params(model_paths[idx], player)
+    print("Evaluating models {}-{}, eval_every={}".format(
+          idx_start, len(model_paths), eval_every))
+    player = None
+    for i, idx in enumerate(tqdm(range(idx_start, len(model_paths), eval_every))):
+        if player and i % 20 == 0:
+            player.network.sess.close()
+            tf.reset_default_graph()
+            player = None
 
-    mcts = strategies.MCTSPlayerMixin(
-        player.network,
-        simulations_per_move=readouts,
-        resign_threshold=-1)
+        if not player:
+            player = oneoff_utils.load_player(model_paths[idx])
+        else:
+            oneoff_utils.restore_params(model_paths[idx], player)
 
-    eval_trees = []
-    for pos_name, position in eval_positions:
-        save_file = os.path.join(data_dir, "pv-{}-{}".format(pos_name, idx))
-        if os.path.exists(save_file) and os.stat(save_file).st_size > 0:
-            continue
+        mcts = strategies.MCTSPlayer(
+            player.network,
+            resign_threshold=-1)
 
-        mcts.initialize_game(position)
-        mcts.suggest_move(position)
+        eval_trees = []
+        for name, position in eval_positions:
+            save_file = os.path.join(data_dir, "pv-{}-{}".format(pos_name, idx))
+            if os.path.exists(save_file) and os.stat(save_file).st_size > 0:
+                continue
 
-        path = []
-        node = mcts.root
-        while node.children:
-            next_kid = np.argmax(node.child_N)
-            node = node.children.get(next_kid)
-            path.append("{},{}".format(node.fmove, int(node.N)))
+            mcts.initialize_game(position)
+            mcts.suggest_move(position)
 
-        with open(save_file, "w") as data:
-            next_kid = np.argmax(mcts.root.child_N)
-            data.write("{},{},  {}\n".format(
-                idx,
-                round(mcts.root.child_action_score[next_kid],2),
-                ",".join(path)))
+            path = []
+            node = mcts.root
+            while node.children:
+                next_kid = np.argmax(node.child_N)
+                node = node.children.get(next_kid)
+                path.append("{},{}".format(node.fmove, int(node.N)))
+
+            save_file = os.path.join(
+                FLAGS.data_dir, "pv-{}-{}".format(name, idx))
+            with open(save_file, "w") as data:
+                next_kid = np.argmax(mcts.root.child_N)
+                data.write("{},{},  {}\n".format(
+                    idx,
+                    round(mcts.root.child_action_score[next_kid],2),
+                    ",".join(path)))
 
 
 def positions_from_sgfs(sgf_files):
-  # sgf_replay doesn't like empty sgf file
-  data = [("empty", go.Position(komi=7.5))]
-  for sgf in sgf_files:
-    sgf_name = os.path.basename(sgf).replace(".sgf", "")
-    positions, moves, _ = oneoff_utils.parse_sgf(sgf)
-    final = positions[-1].play_move(moves[-1])
-    data.append((sgf_name, final))
-  return data
+    # sgf_replay doesn't like empty sgf file
+    data = [("empty", go.Position(komi=7.5))]
+    for sgf in sgf_files:
+        sgf_name = os.path.basename(sgf).replace(".sgf", "")
+        positions, moves, _ = oneoff_utils.parse_sgf(sgf)
+        final = positions[-1].play_move(moves[-1])
+        data.append((sgf_name, final))
+    return data
 
 
 def main(unusedargv):
-  sgf_files = oneoff_utils.find_and_filter_sgf_files(FLAGS.sgf_dir)
-  eval_positions = positions_from_sgfs(sgf_files)
+    sgf_files = oneoff_utils.find_and_filter_sgf_files(FLAGS.sgf_dir)
+    eval_positions = positions_from_sgfs(sgf_files)
 
-  eval_pv(
-      eval_positions,
-      FLAGS.model_dir,
-      FLAGS.data_dir,
-      FLAGS.idx_start,
-      FLAGS.eval_every,
-      FLAGS.readouts)
+    eval_pv(eval_positions)
 
-
-FLAGS = tf.app.flags.FLAGS
 
 if __name__ == "__main__":
-  tf.app.run(main)
+    app.run(main)

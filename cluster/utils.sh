@@ -1,3 +1,17 @@
+# Copyright 2018 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
 # Utilies for working with clusters and google cloud
 
 
@@ -68,6 +82,10 @@ function create_service_account_key() {
     echo >&2 "SERVICE_ACCOUNT_KEY_LOCATION is not defined"
     return 1
   fi
+  if [[ -z "${BUCKET_NAME}" ]]; then
+    echo >&2 "BUCKET_NAME is not defined"
+    return 1
+  fi
 
   if ! gcloud iam service-accounts list --project=$PROJECT | grep -q ${SERVICE_ACCOUNT}; then
     echo >&2 "SERVICE_ACCOUNT doesn't exist: creating"
@@ -80,7 +98,7 @@ function create_service_account_key() {
   }
 
   # Grant it write permissions on our bucket. Should be safe to do multiple times
-  gsutil acl ch -r -u "${SERVICE_ACCOUNT_EMAIL}":W gs://${BUCKET_NAME}
+  gsutil acl ch -u "${SERVICE_ACCOUNT_EMAIL}":W gs://${BUCKET_NAME}
 
   if [[ ! -f "${SERVICE_ACCOUNT_KEY_LOCATION}" ]]; then
     echo >&2 "Service account key file doesn't exist."
@@ -94,4 +112,19 @@ function create_service_account_key() {
       --role roles/storage.objectAdmin \
       --project "${PROJECT}"
   fi
+}
+
+function check_envsubst() {
+  # envsubst doesn't exist for OSX. needs to be brew-installed
+  # via gettext. Should probably warn the user about that.
+  command -v envsubst >/dev/null 2>&1 || {
+    echo >&2 "envsubst is required and not found. Aborting"
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+      echo >&2 "------------------------------------------------"
+      echo >&2 "If you're on OSX, you can install with brew via:"
+      echo >&2 "  brew install gettext"
+      echo >&2 "  brew link --force gettext"
+    fi
+    exit 1;
+  }
 }
