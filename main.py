@@ -102,8 +102,6 @@ def validate(
         *tf_record_dirs: 'Directories where holdout data are',
         checkpoint_name: 'Which checkpoint to evaluate (None=latest)'=None,
         validate_name: 'Name for validation set (i.e., selfplay or human)'=None):
-    print ("Hi", tf_record_dirs, checkpoint_name)
-
     tf_records = []
     with utils.logged_timer("Building lists of holdout files"):
         for record_dir in tf_record_dirs:

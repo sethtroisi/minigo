@@ -182,19 +182,14 @@ def make_chunk_for(output_dir=LOCAL_DIR,
     """
     game_dir = game_dir or fsdb.selfplay_dir()
     ensure_dir_exists(output_dir)
-    models = [(num, name)
-              for num, name in fsdb.get_models() if num < model_num]
     buf = ExampleBuffer(positions)
     files = []
-    for _, model in sorted(models, reverse=True):
-        local_model_dir = os.path.join(local_dir, model)
-        if not tf.gfile.Exists(local_model_dir):
-            print("Rsyncing", model)
-            _rsync_dir(os.path.join(
-                game_dir, model), local_model_dir)
-        files.extend(tf.gfile.Glob(os.path.join(local_model_dir, '*.zz')))
-        if buf.count > positions:
-            break
+
+    for dirpath, dirnames, filenames in tqdm(os.walk(base_dir)):
+        for filename in filenames:
+            if filename.endswith('.sgf'):
+                path = os.path.join(dirpath, filename)
+                files.append(path)
 
     print("Filling from {} files".format(len(files)))
 
