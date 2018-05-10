@@ -1,5 +1,9 @@
+package(default_visibility = [
+    ":__pkg__",
+])
+
 load(
-    ":config/minigo.bzl",
+    "//cc/config:minigo.bzl",
     "minigo_cc_binary",
     "minigo_cc_library",
     "minigo_cc_test",
@@ -176,6 +180,7 @@ minigo_cc_library(
         ":base",
         ":dual_net",
         ":tensorflow",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
     ],
 )

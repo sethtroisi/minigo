@@ -68,7 +68,7 @@ Coord MctsPlayer::SuggestMove(int num_readouts) {
     // In order to be able to inject noise into the root node, we need to first
     // expand it. This should be the only time when SuggestMove is called when
     // the root isn't expanded.
-    if (root_->state != MctsNode::State::kExpanded) {
+    if (!root_->is_expanded) {
       MG_CHECK(root_ == &game_root_);
       auto* first_node = root_->SelectLeaf();
       auto output = Run(&first_node->features);
@@ -85,8 +85,9 @@ Coord MctsPlayer::SuggestMove(int num_readouts) {
     TreeSearch(options_.batch_size);
   }
   auto elapsed = absl::Now() - start;
-  std::cerr << "Seconds per 100 reads: " << elapsed * 100 / num_readouts
-            << std::endl;
+  elapsed = elapsed * 100 / num_readouts;
+  std::cerr << "Milliseconds per 100 reads: " << absl::ToInt64Milliseconds(elapsed)
+            << "ms" << std::endl;
 
   if (ShouldResign()) {
     return Coord::kResign;
@@ -96,7 +97,7 @@ Coord MctsPlayer::SuggestMove(int num_readouts) {
 }
 
 Coord MctsPlayer::PickMove() {
-  if (!options_.soft_pick || root_->position.n() > temperature_cutoff_) {
+  if (!options_.soft_pick || root_->position.n() >= temperature_cutoff_) {
     // Choose the most visited node.
     Coord c = ArgMax(root_->edges, MctsNode::CmpN);
     std::cerr << "Picked arg_max " << c << "\n";

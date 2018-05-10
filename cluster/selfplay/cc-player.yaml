@@ -1,17 +1,17 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: minigo-gpu-player
+  name: minigo-cc-player
 spec:
-  parallelism: 700
+  parallelism: 1280
   completions: 200000
   template:
     metadata:
-      name: gpu-player
+      name: cc-player
     spec:
       containers:
       - name: player
-        image: gcr.io/$PROJECT/$GPU_PLAYER_CONTAINER:$VERSION_TAG
+        image: gcr.io/$PROJECT/$CC_PLAYER_CONTAINER:$VERSION_TAG
         imagePullPolicy: Always
         resources:
           limits:
@@ -21,10 +21,6 @@ spec:
         volumeMounts:
         - name: service-credentials
           mountPath: /etc/credentials
-        - mountPath: /usr/local/bin/nvidia
-          name: nvidia-debug-tools
-        - mountPath: /usr/local/nvidia/lib64
-          name: nvidia-libraries
         env:
         - name: GOOGLE_APPLICATION_CREDENTIALS
           value: /etc/credentials/service-account.json

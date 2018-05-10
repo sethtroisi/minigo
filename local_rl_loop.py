@@ -53,6 +53,7 @@ def rl_loop():
     flags.FLAGS.num_readouts = 10
 
     with tempfile.TemporaryDirectory() as base_dir:
+        flags.FLAGS.base_dir = base_dir
         working_dir = os.path.join(base_dir, 'models_in_training')
         model_save_path = os.path.join(base_dir, 'models', '000000-bootstrap')
         local_eb_dir = os.path.join(base_dir, 'scratch')
@@ -114,5 +115,9 @@ def rl_loop():
             output_sgf=sgf_dir)
 
 if __name__ == '__main__':
-    remaining_argv = flags.FLAGS(sys.argv, known_only=True)
+    # horrible horrible hack to pass flag validation.
+    # Problems come from local_rl_loop calling into main() as library calls
+    # rather than subprocess calls. Subprocessing calls will allow us to pass
+    # flags and have them parsed as normal.
+    remaining_argv = flags.FLAGS(['', '--base_dir=foobar'], known_only=True)
     rl_loop()

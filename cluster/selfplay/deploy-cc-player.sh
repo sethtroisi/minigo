@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Copyright 2018 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,18 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Added to the player image.
-# Wraps our call to main.py
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-set -e
+source ${SCRIPT_DIR}/../common.sh
+source ${SCRIPT_DIR}/../utils.sh
 
-echo creds: $GOOGLE_APPLICATION_CREDENTIALS
-echo bucket: $BUCKET_NAME
-echo board_size: $BOARD_SIZE
+check_envsubst
 
-python3 rl_loop.py selfplay \
-  --bucket_name=$BUCKET_NAME \
-  --resign-threshold=0.88 \
-  --num_readouts=900
-
-echo Finished a set of games!
+cat ${SCRIPT_DIR}/cc-player.yaml | envsubst | kubectl apply -f -

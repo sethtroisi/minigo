@@ -22,18 +22,29 @@ echo creds: $GOOGLE_APPLICATION_CREDENTIALS
 echo bucket: $BUCKET_NAME
 echo board_size: $BOARD_SIZE
 
-MODEL_NAME=gsutil ls "gs://$BUCKET_NAME/models/*.pb" | sort | tail -n 1
-GAMES=`gsutil ls "gs://$BUCKET_NAME/data/selfplay/$MODEL_NAME/*.zz" | wc -l`
+#gcloud auth activate-service-account --key-file=/etc/credentials/service-account.json
+echo Retrieiving Model
+MODEL_FILE=`gsutil ls "gs://$BUCKET_NAME/models/*.pb" | sort | tail -n 1`
+echo Retrieiving games
+NAME=`echo $MODEL_FILE  | rev | cut -d/ -f1 | rev`
+BASENAME=`echo $NAME | cut -d. -f1`
+echo "gsutil ls 'gs://$BUCKET_NAME/data/selfplay/$BASENAME/*.zz'"
+GAMES=`gsutil ls "gs://$BUCKET_NAME/data/selfplay/$BASENAME/*.zz" | wc -l`
 
-if [ $GAMES -lt 15000 ];
+gsutil cp $MODEL_FILE .
+
+if [ $GAMES -lt 25000 ];
 then
+  echo Playing $NAME
   bazel-bin/cc/main \
-    --model=$MODEL_NAME \
+    --model=$NAME \
     --num_readouts=800 \
     --mode=selfplay \
-    --resign-threshold=0.90
+    --resign_threshold=0.88 \
+    --output_dir="gs://$BUCKET_NAME/data/selfplay/$BASENAME" \
+    --sgf_dir="gs://$BUCKET_NAME/sgf/$BASENAME"
+  echo Finished a set of games!
 else
-  echo "$MODEL_NAME has enough games ($GAMES)"
+  echo "$NAME has enough games ($GAMES)"
 fi
 
-echo Finished a set of games!

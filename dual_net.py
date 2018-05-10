@@ -38,6 +38,8 @@ EXAMPLES_PER_GENERATION = 100000
 # How many positions can fit on the trainer; 256 for 19s on a p100
 TRAIN_BATCH_SIZE = 32
 
+VALIDATE_BATCH_SIZE = 32
+
 
 class DualNetwork():
     def __init__(self, save_file, **hparams):
@@ -215,7 +217,7 @@ def model_fn(features, labels, mode, params, config=None):
     policy_entropy = -tf.reduce_mean(tf.reduce_sum(
         policy_output * tf.log(policy_output), axis=1))
     boundaries = [40 * int(1e6), 80 * int(1e6)]
-    values = [1e-2, 1e-3, 1e-4]
+    values = [1e-3, 1e-4, 1e-5]
     learning_rate = tf.train.piecewise_constant(
         global_step, boundaries, values)
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
@@ -305,8 +307,7 @@ def export_model(working_dir, model_path):
         tf.gfile.Copy(filename, destination_path)
 
 
-def train(working_dir, tf_records, generation_num, steps=None, **hparams):
-    assert generation_num > 0, "Model 0 is random weights"
+def train(working_dir, tf_records, steps=None, **hparams):
     estimator = get_estimator(working_dir, **hparams)
 
     def input_fn(): return preprocessing.get_input_tensors(
@@ -314,10 +315,9 @@ def train(working_dir, tf_records, generation_num, steps=None, **hparams):
 
     step_counter_hook = EchoStepCounterHook(output_dir=working_dir)
 
-    max_steps = generation_num * EXAMPLES_PER_GENERATION // TRAIN_BATCH_SIZE
-    print ("Training, max_steps = {}".format(max_steps))
+    print ("Training, steps = {}".format(steps))
 
-    estimator.train(input_fn, hooks=[step_counter_hook], max_steps=max_steps)
+    estimator.train(input_fn, hooks=[step_counter_hook], steps=steps)
 
 
 def validate(working_dir, tf_records, checkpoint_name=None, **hparams):
@@ -326,9 +326,9 @@ def validate(working_dir, tf_records, checkpoint_name=None, **hparams):
         checkpoint_name = estimator.latest_checkpoint()
 
     def input_fn():
-        return preprocessing.get_input_tensors(TRAIN_BATCH_SIZE, tf_records,
-            shuffle_buffer_size=1000, filter_amount=0.05)
-    estimator.evaluate(input_fn, steps=1000)
+        return preprocessing.get_input_tensors(VALIDATE_BATCH_SIZE, tf_records,
+            shuffle_buffer_size=20000, filter_amount=0.05)
+    estimator.evaluate(input_fn, steps=500)
 
 
 class EchoStepCounterHook(tf.train.StepCounterHook):
@@ -336,3 +336,33 @@ class EchoStepCounterHook(tf.train.StepCounterHook):
         s_per_sec = elapsed_steps / elapsed_time
         print("{}: {:.3f} steps per second".format(global_step, s_per_sec))
         super()._log_and_record(elapsed_steps, elapsed_time, global_step)
+
+
+class UpdateRatioSessionHook(tf.train.SessionRunHook):
+    def __init__(self, working_dir, every_n_steps=100):
+        self.working_dir = working_dir
+        self.every_n_steps = every_n_steps
+        self.before_weights = None
+
+    def begin(self):
+        # These calls only works because the SessionRunHook api guarantees this
+        # will get called within a graph context containing our model graph.
+
+        self.summary_writer = SummaryWriterCache.get(self.working_dir)
+        self.weight_tensors = tf.trainable_variables()
+        self.global_step = tf.train.get_or_create_global_step()
+
+    def before_run(self, run_context):
+        global_step = run_context.session.run(self.global_step)
+        if global_step % self.every_n_steps == 0:
+            self.before_weights = run_context.session.run(self.weight_tensors)
+
+    def after_run(self, run_context, run_values):
+        global_step = run_context.session.run(self.global_step)
+        if self.before_weights is not None:
+            after_weights = run_context.session.run(self.weight_tensors)
+            weight_update_summaries = compute_update_ratio(
+                self.weight_tensors, self.before_weights, after_weights)
+            self.summary_writer.add_summary(
+                weight_update_summaries, global_step)
+            self.before_weights = None
