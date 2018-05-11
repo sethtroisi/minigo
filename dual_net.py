@@ -315,8 +315,9 @@ def train(working_dir, tf_records, steps=None, **hparams):
 
     step_counter_hook = EchoStepCounterHook(output_dir=working_dir)
 
+    if steps is None:
+        steps = EXAMPLES_PER_GENERATION // TRAIN_BATCH_SIZE
     print ("Training, steps = {}".format(steps))
-
     estimator.train(input_fn, hooks=[step_counter_hook], steps=steps)
 
 
