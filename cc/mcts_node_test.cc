@@ -15,6 +15,7 @@
 #include "cc/mcts_node.h"
 
 #include <array>
+#include <set>
 
 #include "cc/position.h"
 #include "cc/random.h"
@@ -47,8 +48,8 @@ TEST(MctsNodeTest, ActionFlipping) {
   }
 
   MctsNode::EdgeStats black_stats, white_stats;
-  MctsNode black_root(&black_stats, TestablePosition("", 0, Color::kBlack));
-  MctsNode white_root(&white_stats, TestablePosition("", 0, Color::kWhite));
+  MctsNode black_root(&black_stats, TestablePosition("", Color::kBlack));
+  MctsNode white_root(&white_stats, TestablePosition("", Color::kWhite));
 
   black_root.SelectLeaf()->IncorporateResults(probs, 0, &black_root);
   white_root.SelectLeaf()->IncorporateResults(probs, 0, &white_root);
@@ -69,7 +70,7 @@ TEST(MctsNodeTest, SelectLeaf) {
   probs[c] = 0.4;
 
   MctsNode::EdgeStats root_stats;
-  auto board = TestablePosition(kAlmostDoneBoard, 0, Color::kWhite);
+  auto board = TestablePosition(kAlmostDoneBoard, Color::kWhite);
   MctsNode root(&root_stats, board);
 
   root.SelectLeaf()->IncorporateResults(probs, 0, &root);
@@ -87,7 +88,7 @@ TEST(MctsNodeTest, BackupIncorporateResults) {
   }
 
   MctsNode::EdgeStats root_stats;
-  auto board = TestablePosition(kAlmostDoneBoard, 0, Color::kWhite);
+  auto board = TestablePosition(kAlmostDoneBoard, Color::kWhite);
   MctsNode root(&root_stats, board);
   root.SelectLeaf()->IncorporateResults(probs, 0, &root);
 
@@ -137,7 +138,7 @@ TEST(MctsNodeTest, DoNotExplorePastFinish) {
   }
 
   MctsNode::EdgeStats root_stats;
-  auto board = TestablePosition(kAlmostDoneBoard, 0, Color::kWhite);
+  auto board = TestablePosition(kAlmostDoneBoard, Color::kWhite);
   MctsNode root(&root_stats, board);
   root.SelectLeaf()->IncorporateResults(probs, 0, &root);
 
@@ -146,7 +147,7 @@ TEST(MctsNodeTest, DoNotExplorePastFinish) {
   auto* second_pass = first_pass->MaybeAddChild(Coord::kPass);
   EXPECT_DEATH(second_pass->IncorporateResults(probs, 0, &root),
                "is_game_over");
-  float value = second_pass->position.CalculateScore() > 0 ? 1 : -1;
+  float value = second_pass->position.CalculateScore(0) > 0 ? 1 : -1;
   second_pass->IncorporateEndGameResult(value, &root);
   auto* node_to_explore = second_pass->SelectLeaf();
   // should just stop exploring at the end position.
@@ -189,7 +190,7 @@ TEST(MctsNodeTest, NeverSelectIllegalMoves) {
   probs[1] = 0.99;
 
   MctsNode::EdgeStats root_stats;
-  auto board = TestablePosition(kAlmostDoneBoard, 0, Color::kWhite);
+  auto board = TestablePosition(kAlmostDoneBoard, Color::kWhite);
   MctsNode root(&root_stats, board);
   root.SelectLeaf()->IncorporateResults(probs, 0, &root);
 
@@ -227,7 +228,7 @@ TEST(MctsNodeTest, DontPickUnexpandedChild) {
   probs[17] = 0.99;
 
   MctsNode::EdgeStats root_stats;
-  auto board = TestablePosition(kAlmostDoneBoard, 0, Color::kWhite);
+  auto board = TestablePosition(kAlmostDoneBoard, Color::kWhite);
   MctsNode root(&root_stats, board);
   root.SelectLeaf()->IncorporateResults(probs, 0, &root);
 
@@ -250,7 +251,7 @@ TEST(MctsNodeTest, TestSelectLeaf) {
   probs[17] = 0.99;
 
   MctsNode::EdgeStats root_stats;
-  auto board = TestablePosition(kAlmostDoneBoard, 0, Color::kWhite);
+  auto board = TestablePosition(kAlmostDoneBoard, Color::kWhite);
   MctsNode root(&root_stats, board);
   root.SelectLeaf()->IncorporateResults(probs, 0, &root);
 

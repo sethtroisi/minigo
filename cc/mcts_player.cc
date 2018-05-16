@@ -17,6 +17,7 @@
 #include <cmath>
 #include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <utility>
 
 #include "absl/memory/memory.h"
@@ -38,7 +39,7 @@ std::ostream& operator<<(std::ostream& os, const MctsPlayer::Options& options) {
 
 MctsPlayer::MctsPlayer(std::unique_ptr<DualNet> network, const Options& options)
     : network_(std::move(network)),
-      game_root_(&dummy_stats_, {&bv_, &gv_, options.komi, Color::kBlack}),
+      game_root_(&dummy_stats_, {&bv_, &gv_, Color::kBlack}),
       rnd_(options.random_seed),
       options_(options) {
   options_.resign_threshold = -std::abs(options_.resign_threshold);
@@ -46,7 +47,10 @@ MctsPlayer::MctsPlayer(std::unique_ptr<DualNet> network, const Options& options)
   temperature_cutoff_ = kN * kN / 12;
   root_ = &game_root_;
 
-  InitializeGame({&bv_, &gv_, options.komi, Color::kBlack});
+  std::cerr << "MctsPlayer options: " << options_ << "\n";
+  std::cerr << "Random seed used: " << rnd_.seed() << "\n";
+
+  InitializeGame({&bv_, &gv_, Color::kBlack});
 }
 
 void MctsPlayer::InitializeGame(const Position& position) {
@@ -56,8 +60,7 @@ void MctsPlayer::InitializeGame(const Position& position) {
 }
 
 void MctsPlayer::NewGame() {
-  game_root_ =
-      MctsNode(&dummy_stats_, {&bv_, &gv_, options_.komi, Color::kBlack});
+  game_root_ = MctsNode(&dummy_stats_, {&bv_, &gv_, Color::kBlack});
   root_ = &game_root_;
   game_over_ = false;
 }
@@ -86,8 +89,8 @@ Coord MctsPlayer::SuggestMove(int num_readouts) {
   }
   auto elapsed = absl::Now() - start;
   elapsed = elapsed * 100 / num_readouts;
-  std::cerr << "Milliseconds per 100 reads: " << absl::ToInt64Milliseconds(elapsed)
-            << "ms" << std::endl;
+  std::cerr << "Milliseconds per 100 reads: "
+            << absl::ToInt64Milliseconds(elapsed) << "ms" << std::endl;
 
   if (ShouldResign()) {
     return Coord::kResign;
@@ -126,7 +129,6 @@ Coord MctsPlayer::PickMove() {
 absl::Span<MctsNode* const> MctsPlayer::TreeSearch(int batch_size) {
   int max_iterations = batch_size * 2;
 
-  // TODO(tommadams): Avoid creating this vector each time.
   leaves_.clear();
   for (int i = 0; i < max_iterations; ++i) {
     auto* leaf = root_->SelectLeaf();
@@ -135,7 +137,7 @@ absl::Span<MctsNode* const> MctsPlayer::TreeSearch(int batch_size) {
     }
     if (leaf->position.is_game_over() ||
         leaf->position.n() >= kMaxSearchDepth) {
-      float value = leaf->position.CalculateScore() > 0 ? 1 : -1;
+      float value = leaf->position.CalculateScore(options_.komi) > 0 ? 1 : -1;
       leaf->IncorporateEndGameResult(value, root_);
     } else {
       leaf->AddVirtualLoss(root_);
@@ -205,7 +207,7 @@ void MctsPlayer::PlayMove(Coord c) {
   // Handle consecutive passing.
   if (root_->position.is_game_over() ||
       root_->position.n() >= kMaxSearchDepth) {
-    float score = root_->position.CalculateScore();
+    float score = root_->position.CalculateScore(options_.komi);
     result_string_ = FormatScore(score);
     result_ = score < 0 ? -1 : score > 0 ? 1 : 0;
     game_over_ = true;

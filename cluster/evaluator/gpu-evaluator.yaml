@@ -1,17 +1,17 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: minigo-cc-player
+  name: minigo-gpu-evaluator-{{bnum}}-{{wnum}}
 spec:
-  parallelism: 1280
-  completions: 200000
+  parallelism: 4
+  completions: 10
   template:
     metadata:
-      name: cc-player
+      name: gpu-evaluator
     spec:
       containers:
-      - name: player
-        image: gcr.io/$PROJECT/$CC_PLAYER_CONTAINER:$VERSION_TAG
+      - name: evaluator
+        image: gcr.io/$PROJECT/$GPU_EVALUATOR_CONTAINER:$VERSION_TAG
         imagePullPolicy: Always
         resources:
           limits:
@@ -28,6 +28,10 @@ spec:
           value: $BUCKET_NAME
         - name: BOARD_SIZE
           value: "$BOARD_SIZE"
+        - name: MODEL_WHITE
+          value: {{ white }}
+        - name: MODEL_BLACK
+          value: {{ black }}
         - name: LD_LIBRARY_PATH
           value: /usr/local/nvidia/lib64
       volumes:
