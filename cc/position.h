@@ -16,12 +16,12 @@
 #define CC_POSITION_H_
 
 #include <array>
-#include <cassert>
 #include <cstdint>
 #include <iostream>
 #include <memory>
 #include <string>
 
+#include "cc/check.h"
 #include "cc/color.h"
 #include "cc/constants.h"
 #include "cc/coord.h"
@@ -52,9 +52,10 @@ class BoardVisitor {
 
   // Starts a new visit around the board.
   void Begin() {
-    assert(Done());
-    if (epoch_++ == 0) {
+    MG_DCHECK(Done());
+    if (++epoch_ == 0) {
       memset(visited_.data(), 0, sizeof(visited_));
+      epoch_ = 1;
     }
   }
 
@@ -83,7 +84,10 @@ class BoardVisitor {
  private:
   inline_vector<Coord, kN * kN> stack_;
   std::array<uint8_t, kN * kN> visited_;
-  uint8_t epoch_ = 0;
+
+  // Initializing to 0xff means the visited_ array will get initialized on the
+  // first call to Begin().
+  uint8_t epoch_ = 0xff;
 };
 
 // GroupVisitor simply keeps track of which groups have been visited since the
@@ -94,8 +98,9 @@ class GroupVisitor {
   GroupVisitor() = default;
 
   void Begin() {
-    if (epoch_++ == 0) {
+    if (++epoch_ == 0) {
       memset(visited_.data(), 0, sizeof(visited_));
+      epoch_ = 1;
     }
   }
 
@@ -108,8 +113,11 @@ class GroupVisitor {
   }
 
  private:
-  uint8_t epoch_ = 0;
   std::array<uint8_t, Group::kMaxNumGroups> visited_;
+
+  // Initializing to 0xff means the visited_ array will get initialized on the
+  // first call to Begin().
+  uint8_t epoch_ = 0xff;
 };
 
 // Position represents a single board position.
@@ -129,8 +137,7 @@ class GroupVisitor {
 // instances of the Position class.
 class Position {
  public:
-  Position(BoardVisitor* bv, GroupVisitor* gv, float komi, Color to_play,
-           int n = 0);
+  Position(BoardVisitor* bv, GroupVisitor* gv, Color to_play, int n = 0);
 
   // Copies the position's state from another instance, while preserving the
   // BoardVisitor and GroupVisitor it was constructed with.
@@ -153,7 +160,7 @@ class Position {
 
   // Calculates the score from B perspective. If W is winning, score is
   // negative.
-  float CalculateScore();
+  float CalculateScore(float komi);
 
   // Returns true if playing this move is legal.
   bool IsMoveLegal(Coord c) const;
@@ -214,7 +221,6 @@ class Position {
 
   int n_;
   int num_consecutive_passes_ = 0;
-  float komi_;
 };
 
 }  // namespace minigo

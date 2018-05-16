@@ -82,7 +82,7 @@ def supervised():
         delta_gen = generation - last
         last = generation
         steps = (dual_net.EXAMPLES_PER_GENERATION // dual_net.TRAIN_BATCH_SIZE) * delta_gen
-        main.train_dir(working_dir, pro_dir, model_save_path, steps)
+        main.train_dir(working_dir, pro_dir, model_save_path, steps=steps)
 
         print("Validate on 'holdout' data")
         main.validate(working_dir, holdout_dir, checkpoint_name=model_save_path, validate_name="test")

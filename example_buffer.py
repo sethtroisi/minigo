@@ -142,7 +142,7 @@ def fill_and_wait(bufsize=dual_net.EXAMPLES_PER_GENERATION,
     chunk_to_make = os.path.join(write_dir, str(
         models[-1][0] + 2) + '.tfrecord.zz')
     while tf.gfile.Exists(chunk_to_make):
-        print("Next chunk ({}) already exists.  Sleeping.".format(chunk_to_make))
+        print("Chunk for next model ({}) already exists.  Sleeping.".format(chunk_to_make))
         time.sleep(5 * 60)
         models = fsdb.get_models()[-model_window:]
     print("Making chunk:", chunk_to_make)
@@ -169,16 +169,12 @@ def fill_and_wait(bufsize=dual_net.EXAMPLES_PER_GENERATION,
 def make_chunk_for(output_dir=LOCAL_DIR,
                    local_dir=LOCAL_DIR,
                    game_dir=None,
-                   model_num=1,
+                   chunk_name='chunk',
                    positions=dual_net.EXAMPLES_PER_GENERATION,
                    threads=8,
                    samples_per_game=4):
     """
-    Explicitly make a golden chunk for a given model `model_num`
-    (not necessarily the most recent one).
-
-      While we haven't yet got enough samples (EXAMPLES_PER_GENERATION)
-      Add samples from the games of previous model.
+    Explicitly make a golden chunk
     """
     game_dir = game_dir or fsdb.selfplay_dir()
     ensure_dir_exists(output_dir)
@@ -205,4 +201,6 @@ parser = argparse.ArgumentParser()
 argh.add_commands(parser, [fill_and_wait, smart_rsync, make_chunk_for])
 
 if __name__ == "__main__":
-    argh.dispatch(parser)
+    import sys
+    remaining_argv = flags.FLAGS(sys.argv, known_only=True)
+    argh.dispatch(parser, argv=remaining_argv[1:])

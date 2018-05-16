@@ -147,6 +147,7 @@ def save_plots(data_dir, df):
     plot_path = os.path.join(data_dir, "value_mse.pdf")
     plt.savefig(plot_path)
 
+
 def main(unusedargv):
     sgf_files = oneoff_utils.find_and_filter_sgf_files(
         FLAGS.sgf_dir, FLAGS.min_year, FLAGS.komi)

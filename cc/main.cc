@@ -31,7 +31,6 @@
 #include "absl/time/time.h"
 #include "cc/check.h"
 #include "cc/constants.h"
-#include "cc/dual_net.h"
 #include "cc/file/filesystem.h"
 #include "cc/file/path.h"
 #include "cc/gtp_player.h"
@@ -39,6 +38,7 @@
 #include "cc/mcts_player.h"
 #include "cc/random.h"
 #include "cc/sgf.h"
+#include "cc/tf_dual_net.h"
 #include "cc/tf_utils.h"
 #include "gflags/gflags.h"
 
@@ -67,12 +67,19 @@ DEFINE_string(holdout_dir, "",
 DEFINE_string(sgf_dir, "", "SGF directory. If empty, no SGF is written.");
 DEFINE_double(holdout_pct, 0.05,
               "Fraction of games to hold out for validation.");
-DEFINE_double(disable_resign_pct, 0.05,
+DEFINE_double(disable_resign_pct, 0.1,
               "Fraction of games to disable resignation for.");
 DEFINE_int32(num_readouts, 100,
              "Number of readouts to make during tree search for each move.");
 DEFINE_int32(batch_size, 8,
              "Number of readouts to run inference on in parallel.");
+DEFINE_int32(
+    ponder_limit, 0,
+    "If non-zero and in GTP mode, the number times of times to perform tree "
+    "search while waiting for the opponent to play.");
+DEFINE_bool(
+    courtesy_pass, false,
+    "If true and in GTP mode, we will always pass if the opponent passes.");
 
 DEFINE_string(mode, "", "Mode to run in: \"selfplay\" or \"gtp\"");
 
@@ -163,16 +170,14 @@ void ParseMctsPlayerOptionsFromFlags(MctsPlayer::Options* options) {
 }
 
 void SelfPlay() {
-  auto dual_net = absl::make_unique<DualNet>();
-  dual_net->Initialize(FLAGS_model);
-
   MctsPlayer::Options options;
   ParseMctsPlayerOptionsFromFlags(&options);
   Random rnd;
   if (rnd() < FLAGS_disable_resign_pct) {
     options.resign_threshold = -1;
   }
-  auto player = absl::make_unique<MctsPlayer>(std::move(dual_net), options);
+  auto player = absl::make_unique<MctsPlayer>(
+      absl::make_unique<TfDualNet>(FLAGS_model), options);
 
   while (!player->game_over()) {
     auto move = player->SuggestMove(FLAGS_num_readouts);
@@ -200,20 +205,15 @@ void SelfPlay() {
 }
 
 void Gtp() {
-  auto dual_net = absl::make_unique<DualNet>();
-  dual_net->Initialize(FLAGS_model);
-
   GtpPlayer::Options options;
   ParseMctsPlayerOptionsFromFlags(&options);
   options.num_readouts = FLAGS_num_readouts;
   options.name = absl::StrCat("minigo-", file::Basename(FLAGS_model));
-  auto player = absl::make_unique<GtpPlayer>(std::move(dual_net), options);
-
-  std::cout << "GTP engine ready" << std::endl;
-  std::string line;
-  do {
-    std::getline(std::cin, line);
-  } while (!std::cin.eof() && player->HandleCmd(line));
+  options.ponder_limit = FLAGS_ponder_limit;
+  options.courtesy_pass = FLAGS_courtesy_pass;
+  auto player = absl::make_unique<GtpPlayer>(
+      absl::make_unique<TfDualNet>(FLAGS_model), options);
+  player->Run();
 }
 
 }  // namespace

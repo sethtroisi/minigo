@@ -57,13 +57,8 @@ inline const inline_vector<Coord, 4>& GetNeighborCoords(Coord c) {
 
 }  // namespace
 
-Position::Position(BoardVisitor* bv, GroupVisitor* gv, float komi,
-                   Color to_play, int n)
-    : board_visitor_(bv),
-      group_visitor_(gv),
-      to_play_(to_play),
-      n_(n),
-      komi_(komi) {}
+Position::Position(BoardVisitor* bv, GroupVisitor* gv, Color to_play, int n)
+    : board_visitor_(bv), group_visitor_(gv), to_play_(to_play), n_(n) {}
 
 Position::Position(BoardVisitor* bv, GroupVisitor* gv, const Position& position)
     : Position(position) {
@@ -82,7 +77,7 @@ void Position::PlayMove(Coord c, Color color) {
   } else {
     to_play_ = color;
   }
-  assert(IsMoveLegal(c));
+  MG_CHECK(IsMoveLegal(c));
 
   AddStoneToBoard(c, color);
 
@@ -272,7 +267,7 @@ void Position::RemoveGroup(Coord c) {
   while (!board_visitor_->Done()) {
     c = board_visitor_->Next();
 
-    assert(stones_[c].group_id() == removed_group_id);
+    MG_CHECK(stones_[c].group_id() == removed_group_id);
     stones_[c] = {};
     tiny_set<GroupId, 4> other_groups;
     for (auto nc : GetNeighborCoords(c)) {
@@ -305,7 +300,7 @@ void Position::MergeGroup(Coord c) {
     if (stones_[c].color() == Color::kEmpty) {
       ++group.num_liberties;
     } else {
-      assert(stones_[c].color() == color);
+      MG_CHECK(stones_[c].color() == color);
       ++group.size;
       stones_[c] = s;
       for (auto nc : GetNeighborCoords(c)) {
@@ -391,7 +386,7 @@ bool Position::HasNeighboringGroup(Coord c, GroupId group_id) const {
   return false;
 }
 
-float Position::CalculateScore() {
+float Position::CalculateScore(float komi) {
   int score = 0;
 
   static_assert(static_cast<int>(Color::kEmpty) == 0, "Color::kEmpty != 0");
@@ -446,7 +441,7 @@ float Position::CalculateScore() {
     }
   }
 
-  return static_cast<float>(score) - komi_;
+  return static_cast<float>(score) - komi;
 }
 
 }  // namespace minigo

@@ -120,9 +120,9 @@ def read_tf_records(batch_size, tf_records, num_repeats=1,
     Returns:
         a tf dataset of batched tensors
     '''
+    if shuffle_examples and not shuffle_buffer_size:
+        raise ValueError("Must set shuffle buffer size if shuffling examples")
 
-    if shuffle_buffer_size is None:
-        shuffle_buffer_size = SHUFFLE_BUFFER_SIZE
     if shuffle_records:
         random.shuffle(tf_records)
     record_list = tf.data.Dataset.from_tensor_slices(tf_records)
@@ -179,8 +179,6 @@ def get_input_tensors(batch_size, tf_records, num_repeats=None,
 
     Returns a dict of tensors (see return value of batch_parse_tf_example)
     '''
-    if shuffle_buffer_size is None:
-        shuffle_buffer_size = SHUFFLE_BUFFER_SIZE
     dataset = read_tf_records(batch_size, tf_records, num_repeats=num_repeats,
                               shuffle_records=shuffle_records,
                               shuffle_examples=shuffle_examples,
