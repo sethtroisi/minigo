@@ -216,7 +216,7 @@ def save_plots(data_dir, df):
     plt.ylabel("Accuracy")
     plt.title("Accuracy in Predicting Professional Moves")
     ax = plt.gca()
-    ax.set_ylim([0.3, 0.42])
+    ax.set_ylim([0.32, 0.44])
     plot_path = os.path.join(data_dir, "move_acc2.png")
     plt.savefig(plot_path)
 
@@ -228,7 +228,7 @@ def save_plots(data_dir, df):
     plt.ylabel("MSE/4")
     plt.title("MSE in predicting outcome")
     ax = plt.gca()
-    ax.set_ylim([0.20, 0.30])
+    ax.set_ylim([0.18, 0.28])
     plot_path = os.path.join(data_dir, "value_mse2.png")
     plt.savefig(plot_path)
 
