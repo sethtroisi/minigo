@@ -214,9 +214,7 @@ def model_fn(features, labels, mode):
                 combined_cost, global_step=global_step)
 
     metric_ops = {
-        'accuracy': tf.metrics.accuracy(labels=labels['pi_tensor'],
-                                        predictions=policy_output,
-                                        name='accuracy_op'),
+        'accuracy': tf.metrics.mean(tf.reduce_sum(labels['pi_tensor'] * policy_output)),
         'policy_cost': tf.metrics.mean(policy_cost),
         'value_cost': tf.metrics.mean(value_cost),
         'l2_cost': tf.metrics.mean(l2_cost),
@@ -310,10 +308,13 @@ def validate(working_dir, tf_records, checkpoint_name=None, validate_name=None):
     validate_name = validate_name or "selfplay"
     checkpoint_name = checkpoint_name or estimator.latest_checkpoint()
 
+    step_counter_hook = EchoStepCounterHook(output_dir=working_dir)
     def input_fn():
-        return preprocessing.get_input_tensors(FLAGS.train_batch_size, tf_records,
-                                               shuffle_buffer_size=20000, filter_amount=0.05)
-    estimator.evaluate(input_fn, steps=500, name=validate_name)
+        return preprocessing.get_input_tensors(
+            FLAGS.train_batch_size, tf_records, filter_amount=1.0,
+            shuffle_buffer_size=20000)
+
+    estimator.evaluate(input_fn, hooks=[step_counter_hook], steps=500, name=validate_name)
 
 
 def compute_update_ratio(weight_tensors, before_weights, after_weights):

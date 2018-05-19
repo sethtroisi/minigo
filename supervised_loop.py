@@ -17,10 +17,13 @@
 import os
 import sys
 
+from absl import flags
+
 import preprocessing
 import dual_net
 import main
 
+FLAGS = flags.FLAGS
 
 def supervised():
     """Run the reinforcement learning loop
@@ -37,24 +40,18 @@ def supervised():
         value_mult = int(sys.argv[4])
 
 
-    # monkeypatch the hyperparams so that we get a quickly executing network.
-    hyperparams = dual_net.get_default_hyperparams()
-    hyperparams.update({
-        'num_shared_layers': layers,
-        'k': filters,
-        'fc_width': 2 * filters,
-        'value_head_loss_scalar': 1.0 / value_mult,
-    })
-    dual_net.get_default_hyperparams = lambda: hyperparams
+    FLAGS.trunk_layers = layers
+    FLAGS.conv_width = filters
+    FLAGS.fc_width = 2 * filters
+    FLAGS.value_head_loss_scalar = value_mult
 
-    #dual_net.TRAIN_BATCH_SIZE = 16
     #dual_net.EXAMPLES_PER_GENERATION = 64
 
     #monkeypatch the shuffle buffer size so we don't spin forever shuffling up positions.
     preprocessing.SHUFFLE_BUFFER_SIZE = 200000
 
-    pro_dir = "data/records"
-    holdout_dir = "data/holdouts"
+    pro_dir = "data/kgs"
+    holdout_dir = "data/kgs_holdouts"
 
     name = "{}-{}-{}".format(layers, filters, machine)
     if value_mult != 1.0:
@@ -71,9 +68,9 @@ def supervised():
     bootstrap_save_path = os.path.join(model_dir, '000000-bootstrap')
     main.bootstrap(working_dir, bootstrap_save_path)
 
-    save_points = [1,10,50,100,200,400]
+    save_points = [1,10,50,100,200,300,400,500,600,700,800,900,1000]
     last = 0
-    for generation in [1,10,50,100,200,400]:
+    for generation in save_points:
         model_name = "{:06d}-supervised-{}x{}-{}".format(
             generation, layers, filters, machine)
         print("Training {}!".format(model_name))
@@ -81,7 +78,7 @@ def supervised():
 
         delta_gen = generation - last
         last = generation
-        steps = (dual_net.EXAMPLES_PER_GENERATION // dual_net.TRAIN_BATCH_SIZE) * delta_gen
+        steps = (dual_net.EXAMPLES_PER_GENERATION // FLAGS.train_batch_size) * delta_gen
         main.train_dir(working_dir, pro_dir, model_save_path, steps=steps)
 
         print("Validate on 'holdout' data")
@@ -89,4 +86,5 @@ def supervised():
 
 
 if __name__ == '__main__':
+    remaining_argv = flags.FLAGS(sys.argv, known_only=True)
     supervised()
