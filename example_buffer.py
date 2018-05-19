@@ -114,14 +114,12 @@ def make_chunk_for(
     """
     ensure_dir_exists(output_dir)
     files = []
-    for dirpath, dirnames, filenames in os.walk(local_dir):
-        print (dirpath, len(dirnames), len(filenames))
-        for filename in filenames:
-            if filename.endswith('.tfrecord.zz'):
-                path = os.path.join(dirpath, filename)
-                files.append(path)
+    for filename in os.listdir(local_dir):
+        if filename.endswith('.tfrecord.zz'):
+            path = os.path.join(local_dir, filename)
+            files.append(path)
 
-    print("Filling from {} files".format(len(files)))
+    print ("Filling from {} files".format(len(files)))
     BigShuffle.shuffle_and_collect(
             chunk_name + '.tfrecord.zz',
             files,
