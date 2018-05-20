@@ -213,8 +213,19 @@ def model_fn(features, labels, mode):
             learning_rate, FLAGS.sgd_momentum).minimize(
                 combined_cost, global_step=global_step)
 
+
+    policy_label = tf.argmax(labels['pi_tensor'], 1)
+    policy_top1 = tf.argmax(policy_output, 1)
+    policy_top3 = tf.to_int64(tf.nn.top_k(policy_output, 3).indices)
+
+    top3_match = tf.to_float(tf.reduce_any(tf.equal(tf.expand_dims(policy_label, [1]), policy_top3), 1))
+
     metric_ops = {
-        'accuracy': tf.metrics.mean(tf.reduce_sum(labels['pi_tensor'] * policy_output)),
+        'accuracy_top_1': tf.metrics.accuracy(labels=policy_label, predictions=policy_top1),
+        'accuracy_top_3': tf.metrics.mean(top3_match),
+        'policy_prop_of_move': tf.metrics.mean(tf.reduce_sum(labels['pi_tensor'] * policy_output, 1)),
+        'value_confidence': tf.metrics.mean(tf.abs(value_output)),
+
         'policy_cost': tf.metrics.mean(policy_cost),
         'value_cost': tf.metrics.mean(value_cost),
         'l2_cost': tf.metrics.mean(l2_cost),
