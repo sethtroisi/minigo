@@ -210,10 +210,17 @@ def model_fn(features, labels, mode):
             learning_rate, FLAGS.sgd_momentum).minimize(
                 combined_cost, global_step=global_step)
 
+    policy_label = tf.argmax(labels['pi_tensor'], 1)
+    policy_top1 = tf.argmax(policy_output, 1)
+    policy_top3 = tf.to_int64(tf.nn.top_k(policy_output, 3).indices)
+    top3_match = tf.to_float(tf.reduce_any(tf.equal(tf.expand_dims(policy_label, [1]), policy_top3), 1))
+
     metric_ops = {
-        'accuracy': tf.metrics.accuracy(labels=labels['pi_tensor'],
-                                        predictions=policy_output,
-                                        name='accuracy_op'),
+        'accuracy_top_1': tf.metrics.accuracy(labels=policy_label, predictions=policy_top1),
+        'accuracy_top_3': tf.metrics.mean(top3_match),
+        'policy_prop_of_move': tf.metrics.mean(tf.reduce_sum(labels['pi_tensor'] * policy_output, 1)),
+        'value_confidence': tf.metrics.mean(tf.abs(value_output)),
+
         'policy_cost': tf.metrics.mean(policy_cost),
         'value_cost': tf.metrics.mean(value_cost),
         'l2_cost': tf.metrics.mean(l2_cost),
@@ -294,8 +301,10 @@ def train(working_dir, tf_records, steps=None):
 
     update_ratio_hook = UpdateRatioSessionHook(working_dir)
     step_counter_hook = EchoStepCounterHook(output_dir=working_dir)
+
     if steps is None:
         steps = EXAMPLES_PER_GENERATION // FLAGS.train_batch_size
+    print ("Training, steps = {}".format(steps))
     estimator.train(input_fn, hooks=[
         update_ratio_hook, step_counter_hook], steps=steps)
 
@@ -306,8 +315,10 @@ def validate(working_dir, tf_records, checkpoint_name=None, validate_name=None):
     checkpoint_name = checkpoint_name or estimator.latest_checkpoint()
 
     def input_fn():
-        return preprocessing.get_input_tensors(FLAGS.train_batch_size, tf_records,
-                                               shuffle_buffer_size=20000, filter_amount=0.05)
+        return preprocessing.get_input_tensors(
+            FLAGS.train_batch_size, tf_records, filter_amount=0.05,
+            shuffle_buffer_size=20000)
+
     estimator.evaluate(input_fn, steps=500, name=validate_name)
 
 
@@ -328,7 +339,7 @@ def compute_update_ratio(weight_tensors, before_weights, after_weights):
 class EchoStepCounterHook(tf.train.StepCounterHook):
     def _log_and_record(self, elapsed_steps, elapsed_time, global_step):
         s_per_sec = elapsed_steps / elapsed_time
-        print("{:.3f} steps per second".format(s_per_sec))
+        print("{}: {:.3f} steps per second".format(global_step, s_per_sec))
         super()._log_and_record(elapsed_steps, elapsed_time, global_step)
 
 
