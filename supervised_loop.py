@@ -35,7 +35,7 @@ def supervised():
     assert len(sys.argv) >= 4, ("Three Args: layers, filters, machine | got:", sys.argv[1:])
     layers, filters, machine = map(int, sys.argv[1:4])
 
-    value_mult = 1.0
+    value_mult = 100
     if len(sys.argv) >= 5:
         value_mult = int(sys.argv[4])
 
@@ -54,7 +54,7 @@ def supervised():
     holdout_dir = "data/kgs_holdouts"
 
     name = "{}-{}-{}".format(layers, filters, machine)
-    if value_mult != 1.0:
+    if value_mult != 100:
         name = "{}-{}-{}-{}".format(layers, filters, value_mult, machine)
 
     base_dir = "supervised/{}/".format(name)

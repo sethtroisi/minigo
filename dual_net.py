@@ -200,7 +200,7 @@ def model_fn(features, labels, mode):
     l2_cost = FLAGS.l2_strength * tf.add_n([
         tf.nn.l2_loss(v)
         for v in tf.trainable_variables() if not 'bias' in v.name])
-    combined_cost = policy_cost + FLAGS.value_head_loss_scalar * value_cost + l2_cost
+    combined_cost = policy_cost + (1.0 / FLAGS.value_head_loss_scalar * value_cost) + l2_cost
     policy_entropy = -tf.reduce_mean(tf.reduce_sum(
         policy_output * tf.log(policy_output), axis=1))
     boundaries = [40 * int(1e6), 80 * int(1e6)]
