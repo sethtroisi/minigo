@@ -210,15 +210,19 @@ def model_fn(features, labels, mode):
             learning_rate, FLAGS.sgd_momentum).minimize(
                 combined_cost, global_step=global_step)
 
-    policy_label = tf.argmax(labels['pi_tensor'], 1)
-    policy_top1 = tf.argmax(policy_output, 1)
-    policy_top3 = tf.to_int64(tf.nn.top_k(policy_output, 3).indices)
-    top3_match = tf.to_float(tf.reduce_any(tf.equal(tf.expand_dims(policy_label, [1]), policy_top3), 1))
+    policy_labels = tf.argmax(labels['pi_tensor'], axis=1)
+    # TODO(sethtroisi) test this works
+    policy_in_top3 = tf.cast(tf.nn.in_top_k(policy_output, policy_labels, 3), tf.float32)
 
+    # map policy_labels to policy_output and reduce_sum
+    prop_top_policy_label = tf.reduce_sum(labels['pi_tensor'] * policy_output, 1)
+    prop_top_policy_prediction = tf.reduce_sum(tf.nn.top_k(policy_output, 1).values, 1)
+    
     metric_ops = {
-        'accuracy_top_1': tf.metrics.accuracy(labels=policy_label, predictions=policy_top1),
-        'accuracy_top_3': tf.metrics.mean(top3_match),
-        'policy_prop_of_move': tf.metrics.mean(tf.reduce_sum(labels['pi_tensor'] * policy_output, 1)),
+        'accuracy_top_1': tf.metrics.accuracy(labels=policy_labels,
+                                              predictions=tf.argmax(policy_output, axis=1)),
+        'accuracy_top_3': tf.metrics.mean(policy_in_top3),
+        'policy_prop_of_move': tf.metrics.mean(),
         'value_confidence': tf.metrics.mean(tf.abs(value_output)),
 
         'policy_cost': tf.metrics.mean(policy_cost),
@@ -227,6 +231,7 @@ def model_fn(features, labels, mode):
         'policy_entropy': tf.metrics.mean(policy_entropy),
         'combined_cost': tf.metrics.mean(combined_cost),
     }
+
     # Create summary ops so that they show up in SUMMARIES collection
     # That way, they get logged automatically during training
     for metric_name, metric_op in metric_ops.items():
