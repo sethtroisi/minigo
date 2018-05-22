@@ -210,26 +210,31 @@ def model_fn(features, labels, mode):
             learning_rate, FLAGS.sgd_momentum).minimize(
                 combined_cost, global_step=global_step)
 
-    policy_labels = tf.argmax(labels['pi_tensor'], axis=1)
-    # TODO(sethtroisi) test this works
-    policy_in_top3 = tf.cast(tf.nn.in_top_k(policy_output, policy_labels, 3), tf.float32)
+    policy_target_top_1 = tf.argmax(labels['pi_tensor'], axis=1)
+    policy_output_top_1 = tf.argmax(policy_output, axis=1)
 
-    # map policy_labels to policy_output and reduce_sum
-    prop_top_policy_label = tf.reduce_sum(labels['pi_tensor'] * policy_output, 1)
-    prop_top_policy_prediction = tf.reduce_sum(tf.nn.top_k(policy_output, 1).values, 1)
-    
+    policy_output_in_top3 = tf.to_float32(
+        tf.nn.in_top_k(policy_output, policy_top_1, k=3))
+
+    policy_top_1_confidence = tf.reduce_max(policy_output, axis=1)
+    policy_target_top_1_confidence = tf.boolean_mask(
+        tf.one_hot(policy_target_top_1, tf.shape(policy_output)[1]),
+        policy_output)
+
     metric_ops = {
-        'accuracy_top_1': tf.metrics.accuracy(labels=policy_labels,
-                                              predictions=tf.argmax(policy_output, axis=1)),
-        'accuracy_top_3': tf.metrics.mean(policy_in_top3),
-        'policy_prop_of_move': tf.metrics.mean(),
-        'value_confidence': tf.metrics.mean(tf.abs(value_output)),
-
         'policy_cost': tf.metrics.mean(policy_cost),
         'value_cost': tf.metrics.mean(value_cost),
         'l2_cost': tf.metrics.mean(l2_cost),
         'policy_entropy': tf.metrics.mean(policy_entropy),
         'combined_cost': tf.metrics.mean(combined_cost),
+
+        'policy_accuracy_top_1': tf.metrics.accuracy(
+            labels=policy_target_top_1, predictions=policy_output_top_1)
+        'policy_accuracy_top_3': tf.metrics.mean(policy_output_in_top3),
+        'policy_top_1_confidence': tf.metrics.mean(policy_top_1_confidence),
+        'policy_target_top_1_confidence': tf.metrics.mean(
+            policy_target_top_1_confidence),
+        'value_confidence': tf.metrics.mean(tf.abs(value_output)),
     }
 
     # Create summary ops so that they show up in SUMMARIES collection
