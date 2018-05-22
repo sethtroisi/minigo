@@ -213,25 +213,33 @@ def model_fn(features, labels, mode):
             learning_rate, FLAGS.sgd_momentum).minimize(
                 combined_cost, global_step=global_step)
 
+    policy_target_top_1 = tf.argmax(labels['pi_tensor'], axis=1)
+    policy_output_top_1 = tf.argmax(policy_output, axis=1)
 
-    policy_label = tf.argmax(labels['pi_tensor'], 1)
-    policy_top1 = tf.argmax(policy_output, 1)
-    policy_top3 = tf.to_int64(tf.nn.top_k(policy_output, 3).indices)
+    policy_output_in_top3 = tf.to_float(
+        tf.nn.in_top_k(policy_output, policy_target_top_1, k=3))
 
-    top3_match = tf.to_float(tf.reduce_any(tf.equal(tf.expand_dims(policy_label, [1]), policy_top3), 1))
+    policy_top_1_confidence = tf.reduce_max(policy_output, axis=1)
+    policy_target_top_1_confidence = tf.boolean_mask(
+        policy_output,
+        tf.one_hot(policy_target_top_1, tf.shape(policy_output)[1]))
 
     metric_ops = {
-        'accuracy_top_1': tf.metrics.accuracy(labels=policy_label, predictions=policy_top1),
-        'accuracy_top_3': tf.metrics.mean(top3_match),
-        'policy_prop_of_move': tf.metrics.mean(tf.reduce_sum(labels['pi_tensor'] * policy_output, 1)),
-        'value_confidence': tf.metrics.mean(tf.abs(value_output)),
-
         'policy_cost': tf.metrics.mean(policy_cost),
         'value_cost': tf.metrics.mean(value_cost),
         'l2_cost': tf.metrics.mean(l2_cost),
         'policy_entropy': tf.metrics.mean(policy_entropy),
         'combined_cost': tf.metrics.mean(combined_cost),
+
+        'policy_accuracy_top_1': tf.metrics.accuracy(
+            labels=policy_target_top_1, predictions=policy_output_top_1),
+        'policy_accuracy_top_3': tf.metrics.mean(policy_output_in_top3),
+        'policy_top_1_confidence': tf.metrics.mean(policy_top_1_confidence),
+        'policy_target_top_1_confidence': tf.metrics.mean(
+            policy_target_top_1_confidence),
+        'value_confidence': tf.metrics.mean(tf.abs(value_output)),
     }
+
     # Create summary ops so that they show up in SUMMARIES collection
     # That way, they get logged automatically during training
     for metric_name, metric_op in metric_ops.items():
@@ -250,7 +258,11 @@ def model_fn(features, labels, mode):
 
 
 def get_estimator(working_dir):
-    return tf.estimator.Estimator(model_fn, model_dir=working_dir)
+    run_config = tf.estimator.RunConfig(save_summary_steps=500)
+    return tf.estimator.Estimator(
+        model_fn,
+        model_dir=working_dir,
+        config=run_config)
 
 
 def bootstrap(working_dir):
@@ -319,13 +331,12 @@ def validate(working_dir, tf_records, checkpoint_name=None, validate_name=None):
     validate_name = validate_name or "selfplay"
     checkpoint_name = checkpoint_name or estimator.latest_checkpoint()
 
-    step_counter_hook = EchoStepCounterHook(output_dir=working_dir)
     def input_fn():
         return preprocessing.get_input_tensors(
-            FLAGS.train_batch_size, tf_records, filter_amount=1.0,
+            FLAGS.train_batch_size, tf_records, filter_amount=0.05,
             shuffle_buffer_size=20000)
 
-    estimator.evaluate(input_fn, hooks=[step_counter_hook], steps=500, name=validate_name)
+    estimator.evaluate(input_fn, steps=500, name=validate_name)
 
 
 def compute_update_ratio(weight_tensors, before_weights, after_weights):

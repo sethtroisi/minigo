@@ -179,6 +179,7 @@ def get_input_tensors(batch_size, tf_records, num_repeats=None,
 
     Returns a dict of tensors (see return value of batch_parse_tf_example)
     '''
+    print ("Reading tf_records from {} inputs".format(len(tf_records)))
     dataset = read_tf_records(batch_size, tf_records, num_repeats=num_repeats,
                               shuffle_records=shuffle_records,
                               shuffle_examples=shuffle_examples,
@@ -187,7 +188,6 @@ def get_input_tensors(batch_size, tf_records, num_repeats=None,
     dataset = dataset.filter(lambda t: tf.equal(tf.shape(t)[0], batch_size))
     dataset = dataset.map(functools.partial(
         batch_parse_tf_example, batch_size))
-    print ("Read {} tf_records for input".format(len(tf_records)))
     return dataset.make_one_shot_iterator().get_next()
     if random_rotation:
         dataset = dataset.map(_random_rotation)
