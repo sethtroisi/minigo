@@ -18,7 +18,7 @@
 #include "absl/memory/memory.h"
 #include "cc/algorithm.h"
 #include "cc/constants.h"
-#include "cc/dual_net/dual_net.h"
+#include "cc/dual_net/fake_net.h"
 #include "cc/test_utils.h"
 #include "gtest/gtest.h"
 
@@ -36,39 +36,10 @@ static constexpr char kAlmostDoneBoard[] = R"(
     XXXXXOOOO
     XXXXOOOOO)";
 
-class FakeNet : public DualNet {
- public:
-  FakeNet(absl::Span<const float> priors, float value) : value_(value) {
-    if (!priors.empty()) {
-      assert(priors.size() == kNumMoves);
-      for (int i = 0; i < kNumMoves; ++i) {
-        priors_[i] = priors[i];
-      }
-    } else {
-      for (auto& prior : priors_) {
-        prior = 1.0 / kNumMoves;
-      }
-    }
-  }
-
-  void RunMany(absl::Span<const BoardFeatures* const> features,
-               absl::Span<Output> outputs, Random* rnd) override {
-    for (auto& output : outputs) {
-      output.policy = priors_;
-      output.value = value_;
-    }
-  }
-
- private:
-  std::array<float, kNumMoves> priors_;
-  float value_;
-};
-
 class TestablePlayer : public MctsPlayer {
  public:
   explicit TestablePlayer(const Options& options)
-      : MctsPlayer(absl::make_unique<FakeNet>(absl::Span<const float>(), 0),
-                   options) {}
+      : MctsPlayer(absl::make_unique<FakeNet>(), options) {}
 
   TestablePlayer(absl::Span<const float> fake_priors, float fake_value,
                  const Options& options)
@@ -118,6 +89,27 @@ std::unique_ptr<TestablePlayer> CreateAlmostDonePlayer(int n) {
   auto board = TestablePosition(kAlmostDoneBoard, Color::kBlack, n);
   player->InitializeGame(board);
   return player;
+}
+
+TEST(MctsPlayerTest, TimeRecommendation) {
+  // Early in the game with plenty of time left, the time recommendation should
+  // be the requested number of seconds per move.
+  EXPECT_EQ(5, TimeRecommendation(0, 5, 1000, 0.98));
+  EXPECT_EQ(5, TimeRecommendation(1, 5, 1000, 0.98));
+  EXPECT_EQ(5, TimeRecommendation(10, 5, 1000, 0.98));
+  EXPECT_EQ(5, TimeRecommendation(50, 5, 1000, 0.98));
+
+  // With a small time limit, the time recommendation should immediately be less
+  // than requested.
+  EXPECT_GT(1.0f, TimeRecommendation(0, 5, 10, 0.98));
+
+  // Time recommendations for even and odd moves should be identical.
+  EXPECT_EQ(TimeRecommendation(20, 5, 10, 0.98),
+            TimeRecommendation(21, 5, 10, 0.98));
+
+  // If we're later into the game than should really be possible, time
+  // recommendation should be almost zero.
+  EXPECT_GT(0.0001, TimeRecommendation(1000, 5, 100, 0.98));
 }
 
 TEST(MctsPlayerTest, InjectNoise) {

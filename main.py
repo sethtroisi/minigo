@@ -207,8 +207,7 @@ def preprocess(
 def convert(load_file, dest_file):
     from tensorflow.python.framework import meta_graph
     features, labels = dual_net.get_inference_input()
-    dual_net.model_fn(features, labels, tf.estimator.ModeKeys.PREDICT,
-                      dual_net.get_default_hyperparams())
+    dual_net.model_fn(features, labels, tf.estimator.ModeKeys.PREDICT)
     sess = tf.Session()
 
     # retrieve the global step as a python value

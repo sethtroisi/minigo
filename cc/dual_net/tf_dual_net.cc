@@ -35,7 +35,10 @@ namespace minigo {
 TfDualNet::TfDualNet(const std::string& graph_path) {
   GraphDef graph_def;
   TF_CHECK_OK(ReadBinaryProto(Env::Default(), graph_path, &graph_def));
-  session_.reset(NewSession(SessionOptions()));
+
+  SessionOptions options;
+  options.config.mutable_gpu_options()->set_allow_growth(true);
+  session_.reset(NewSession(options));
   TF_CHECK_OK(session_->Create(graph_def));
 
   inputs_.clear();
@@ -46,6 +49,14 @@ TfDualNet::TfDualNet(const std::string& graph_path) {
   output_names_.clear();
   output_names_.push_back("policy_output");
   output_names_.push_back("value_output");
+
+  // Tensorflow lazily initializes the first time Session::Run is called, which
+  // can take hundreds of milliseconds. This intefers with time control, so
+  // explicitly run inference once during construction.
+  Output output;
+  BoardFeatures features;
+  const auto* features_ptr = &features;
+  RunMany({&features_ptr, 1}, {&output, 1});
 }
 
 TfDualNet::~TfDualNet() {

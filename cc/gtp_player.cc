@@ -34,9 +34,7 @@ namespace minigo {
 GtpPlayer::GtpPlayer(std::unique_ptr<DualNet> network, const Options& options)
     : MctsPlayer(std::move(network), options),
       ponder_limit_(options.ponder_limit),
-      courtesy_pass_(options.courtesy_pass),
-      name_(options.name),
-      num_readouts_(options.num_readouts) {
+      courtesy_pass_(options.courtesy_pass) {
   RegisterCmd("boardsize", &GtpPlayer::HandleBoardsize);
   RegisterCmd("clear_board", &GtpPlayer::HandleClearBoard);
   RegisterCmd("echo", &GtpPlayer::HandleEcho);
@@ -45,6 +43,7 @@ GtpPlayer::GtpPlayer(std::unique_ptr<DualNet> network, const Options& options)
   RegisterCmd("genmove", &GtpPlayer::HandleGenmove);
   RegisterCmd("info", &GtpPlayer::HandleInfo);
   RegisterCmd("known_command", &GtpPlayer::HandleKnownCommand);
+  RegisterCmd("komi", &GtpPlayer::HandleKomi);
   RegisterCmd("list_commands", &GtpPlayer::HandleListCommands);
   RegisterCmd("loadsgf", &GtpPlayer::HandleLoadsgf);
   RegisterCmd("name", &GtpPlayer::HandleName);
@@ -70,11 +69,11 @@ void GtpPlayer::Run() {
   }
 }
 
-Coord GtpPlayer::SuggestMove(int num_readouts) {
+Coord GtpPlayer::SuggestMove() {
   if (courtesy_pass_ && root()->move == Coord::kPass) {
     return Coord::kPass;
   }
-  return MctsPlayer::SuggestMove(num_readouts);
+  return MctsPlayer::SuggestMove();
 }
 
 void GtpPlayer::RegisterCmd(const std::string& cmd, CmdHandler handler) {
@@ -293,7 +292,7 @@ GtpPlayer::Response GtpPlayer::HandleGenmove(
     return response;
   }
 
-  auto c = SuggestMove(num_readouts_);
+  auto c = SuggestMove();
   std::cerr << root()->Describe() << std::endl;
   last_genmove_ = root()->position.to_play();
   PlayMove(c);
@@ -310,9 +309,7 @@ GtpPlayer::Response GtpPlayer::HandleInfo(
 
   std::ostringstream oss;
   oss << options();
-  oss << " num_readouts: " << num_readouts_
-      << " report_search_interval:" << report_search_interval_
-      << " name:" << name_;
+  oss << " report_search_interval:" << report_search_interval_;
   return Response::Ok(oss.str());
 }
 
@@ -329,6 +326,21 @@ GtpPlayer::Response GtpPlayer::HandleKnownCommand(
     result = "false";
   }
   return Response::Ok(result);
+}
+
+GtpPlayer::Response GtpPlayer::HandleKomi(
+    absl::string_view cmd, const std::vector<absl::string_view>& args) {
+  auto response = CheckArgsExact(cmd, 1, args);
+  if (!response.ok) {
+    return response;
+  }
+
+  double x;
+  if (!absl::SimpleAtod(args[0], &x) || x != options().komi) {
+    return Response::Error("unacceptable komi");
+  }
+
+  return Response::Ok();
 }
 
 GtpPlayer::Response GtpPlayer::HandleListCommands(
@@ -382,7 +394,7 @@ GtpPlayer::Response GtpPlayer::HandleName(
   if (!response.ok) {
     return response;
   }
-  return Response::Ok(name_);
+  return Response::Ok(options().name);
 }
 
 GtpPlayer::Response GtpPlayer::HandlePlay(
@@ -450,7 +462,7 @@ GtpPlayer::Response GtpPlayer::HandleReadouts(
   if (!absl::SimpleAtoi(args[0], &x) || x <= 0) {
     return Response::Error("couldn't parse ", args[0], " as an integer > 0");
   } else {
-    num_readouts_ = x;
+    mutable_options()->num_readouts = x;
   }
 
   return Response::Ok();

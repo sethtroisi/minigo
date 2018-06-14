@@ -26,6 +26,32 @@ minigo_cc_library(
 )
 
 minigo_cc_library(
+    name = "fake_net",
+    testonly = 1,
+    srcs = ["fake_net.cc"],
+    hdrs = ["fake_net.h"],
+    deps = [
+        ":dual_net",
+        "//cc:base",
+    ],
+)
+
+minigo_cc_library(
+    name = "inference_server",
+    srcs = ["inference_server.cc"],
+    hdrs = ["inference_server.h"],
+    deps = [
+        ":dual_net",
+        "//cc:thread_safe_queue",
+        "//proto:inference_service_proto",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_grpc//:grpc++",
+    ],
+)
+
+minigo_cc_library(
     name = "tf_dual_net",
     srcs = ["tf_dual_net.cc"],
     hdrs = ["tf_dual_net.h"],
@@ -48,6 +74,19 @@ minigo_cc_test_9_only(
         ":dual_net",
         "//cc:position",
         "//cc:test_utils",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+minigo_cc_test_9_only(
+    name = "inference_server_test",
+    srcs = ["inference_server_test.cc"],
+    deps = [
+        ":fake_net",
+        ":inference_server",
+        "//cc:random",
+        "//proto:inference_service_proto",
+        "@com_google_absl//absl/strings",
         "@com_google_googletest//:gtest_main",
     ],
 )

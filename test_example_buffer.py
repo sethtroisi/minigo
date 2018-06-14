@@ -21,19 +21,21 @@ def collect(items, threads=4):
 
         count = 0
         count_size = 0
-        with mp.Pool(threads, maxtasksperchild=10) as pool:
+#        with mp.Pool(threads, maxtasksperchild=10) as pool:
+        with mp.Pool(threads) as pool:
 #            res = map(get_examples, items)
-            res = pool.imap(get_examples, items, chunksize=10)
+#            res = pool.imap(get_examples, items, chunksize=10)
+            res = pool.imap(get_examples, items)
             for proto in tqdm(res):
                 proto = proto[:]
-                writer.write(proto)
+                #writer.write(proto)
 
                 count += 1
                 count_size += len(proto)
                 if count % 100000 == 0:
                     print (count, count_size)
-#                if count % 10 == 0:
-#                    time.sleep(0.1)
+                if count % 100 == 0:
+                    time.sleep(0.1)
 
 
 collect(itertools.repeat(6000, 10 ** 6))
