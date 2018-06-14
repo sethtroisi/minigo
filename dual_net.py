@@ -60,8 +60,9 @@ flags.DEFINE_float('l2_strength', 1e-4,
 flags.DEFINE_float('sgd_momentum', 0.9,
                    'Momentum parameter for learning rate.')
 
-flags.DEFINE_float('value_head_loss_scalar', 100,
-                   'Multiple (1/scalar) for value head loss.')
+flags.DEFINE_float('value_head_loss_scalar', 1,
+                   'value_loss is scaled by this constant, AGZ suggests using '
+                   '1/100 for supervised learning.')
 
 # See www.moderndescartes.com/essays/shuffle_viz for discussion on sizing
 flags.DEFINE_integer('shuffle_buffer_size', 20000,
@@ -197,7 +198,7 @@ def model_fn(features, labels, mode, params=None):
     policy_cost = tf.reduce_mean(
         tf.nn.softmax_cross_entropy_with_logits_v2(
             logits=logits, labels=tf.stop_gradient(labels['pi_tensor'])))
-    value_cost = tf.reduce_mean(
+    value_cost = FLAGS.value_head_loss_scalar * tf.reduce_mean(
         tf.square(value_output - labels['value_tensor']))
     l2_cost = FLAGS.l2_strength * tf.add_n([
         tf.nn.l2_loss(v)
@@ -391,7 +392,7 @@ def export_model(working_dir, model_path):
         tf.gfile.Copy(filename, destination_path)
 
 
-def train(working_dir, *tf_records, steps=None):
+def train(working_dir, *tf_records, steps=None, epochs=None):
     if FLAGS.use_tpu:
         tpu_cluster_resolver = tf.contrib.cluster_resolver.TPUClusterResolver(
             FLAGS.tpu_name, zone=None, project=None)
@@ -421,16 +422,20 @@ def train(working_dir, *tf_records, steps=None):
 
         def input_fn():
             return preprocessing.get_input_tensors(
-                FLAGS.train_batch_size, tf_records, filter_amount=1.0,
-                shuffle_buffer_size=FLAGS.shuffle_buffer_size)
+                FLAGS.train_batch_size,
+                tf_records,
+                filter_amount=1.0,
+                num_repeats=epochs
+                shuffle_buffer_size=FLAGS.shuffle_buffer_size,)
 
         hooks = [UpdateRatioSessionHook(working_dir),
                  EchoStepCounterHook(output_dir=working_dir)]
 
     if steps is None:
         steps = EXAMPLES_PER_GENERATION // FLAGS.train_batch_size
-    print("Training, steps = {}".format(steps))
-    estimator.train(input_fn, steps=int(steps), hooks=hooks)
+
+    print("Training, steps = {}, epochs = {}".format(steps, epochs))
+    estimator.train(input_fn, steps=steps, hooks=hooks)
 
 
 def validate(working_dir, tf_records, checkpoint_name=None, validate_name=None):

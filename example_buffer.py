@@ -7,13 +7,10 @@ import multiprocessing as mp
 import os
 import random
 import subprocess
-import sys
 import time
-from collections import deque
-
-from tqdm import tqdm
-from absl import flags
 import tensorflow as tf
+from tqdm import tqdm
+from collections import deque
 
 import preprocessing
 import dual_net
@@ -31,7 +28,12 @@ def pick_examples_from_tfrecord(filename, samples_per_game=4):
     if len(protos) < 20:  # Filter games with less than 20 moves
         return []
     choices = random.sample(protos, min(len(protos), samples_per_game))
-    return choices
+
+    def make_example(protostring):
+        e = tf.train.Example()
+        e.ParseFromString(protostring)
+        return e
+    return list(map(make_example, choices))
 
 
 def choose(game, samples_per_game=4):
@@ -41,96 +43,171 @@ def choose(game, samples_per_game=4):
 
 
 def file_timestamp(filename):
-    import re
-    return int(re.split(r'[-.]', os.path.basename(filename))[1])
+    return int(os.path.basename(filename).split('-')[0])
 
 
-class BigShuffle():
-    def shuffle_and_collect(path, games, threads=4, samples_per_game=4, num_shards=10):
-        # 1. Determine roughly how many shards
-        # 2. Write (buffered) each proto to one of the shards
-        # 3. Randomize each shard
-        # 4. Join each shard into one file
+def _ts_to_str(timestamp):
+    return dt.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
 
-        # Avoid Step 1 by allocating 1Gig of memory
-        #shard_buffer_size = 10 ** 9 // num_shards
 
-        shard_names = []
-        shards = []
-        for i in range(num_shards):
-            shard_name = "shuffle.shard-{}-of-{}".format(i, num_shards)
-            shard_path = os.path.join("/media/eights/Sojourner/tmp", shard_name)
-            shard_names.append(shard_path)
+class ExampleBuffer():
+    def __init__(self, max_size=2000000):
+        self.examples = deque(maxlen=max_size)
+        self.max_size = max_size
 
-            # Writes raw data
-            writer = tf.python_io.TFRecordWriter(shard_path)
-            shards.append(writer)
+    def parallel_fill(self, games, threads=8, samples_per_game=4):
+        games.sort(key=os.path.basename)
+        if len(games) * samples_per_game > self.max_size:
+            games = games[-1 * self.max_size // samples_per_game:]
 
         func = functools.partial(choose, samples_per_game=samples_per_game)
-        count = 0
-        count_size = 0
-        with timer("Shuffling to shards"), mp.Pool(threads, maxtasksperchild=10) as pool:
-#            res = map(func, games)
-            res = pool.imap(func, games, chunksize=100)
-            for game in tqdm(res, total=len(games)):
-                for ts, proto in game:
-                    count += 1
-                    count_size += len(proto)
-                    # Step 2, Step 3: ideally these writes are buffered
-                    shard = random.choice(shards)
-                    shard.write(proto)
-                    #shard.flush() # Test if this has an impact on memory
 
-                    if count % 100000 == 0:
-                        print (count, count_size)
+        with mp.Pool(threads) as pool:
+            res = tqdm(pool.imap(func, games), total=len(games))
+            self.examples.extend(itertools.chain(*res))
+
+    def update(self, new_games, samples_per_game=4):
+        """
+        new_games is list of .tfrecord.zz files of new games
+        """
+        new_games.sort(key=os.path.basename)
+        first_new_game = None
+        for idx, game in enumerate(tqdm(new_games)):
+            timestamp = file_timestamp(game)
+            if timestamp <= self.examples[-1][0]:
+                continue
+            elif first_new_game is None:
+                first_new_game = idx
+                print(
+                    "Found {}/{} new games".format(len(new_games) - idx, len(new_games)))
+
+            choices = [(timestamp, ex) for ex in pick_examples_from_tfrecord(
+                game, samples_per_game)]
+            self.examples.extend(choices)
+
+    def flush(self, path):
+        with timer("Writing examples to " + path):
+            random.shuffle(self.examples)
+            preprocessing.write_tf_examples(
+                path, [ex[1] for ex in self.examples])
+
+    @property
+    def count(self):
+        return len(self.examples)
+
+    def __str__(self):
+        return "ExampleBuffer: {} positions sampled from {} to {}".format(
+            self.count,
+            _ts_to_str(self.examples[0][0]),
+            _ts_to_str(self.examples[-1][0]))
 
 
-        print (count, "positions processed", count_size)
-
-        for shard in shards:
-            shard.flush()
-            shard.close()
-
-        '''
-        # more than this and we have trouble
-        max_games_per_shard = 10 ** 6
-
-        joined_writer = tf.python_io.TFRecordWriter(path, READ_OPTS)
-        with timer("Shuffling and joining shards"), mp.Pool(threads) as pool:
-            for shard_name in shard_names:
-                res = pick_examples_from_tfrecord(shard_name, samples_per_game=max_games_per_shard)
-                random.shuffle(res)
-                for proto in res:
-                    joined_writer.write(res)
-        '''
+def files_for_model(model):
+    return tf.gfile.Glob(os.path.join(LOCAL_DIR, model[1], '*.zz'))
 
 
+def smart_rsync(
+        from_model_num=0,
+        source_dir=None,
+        dest_dir=LOCAL_DIR):
+    source_dir = source_dir or fsdb.selfplay_dir()
+    from_model_num = 0 if from_model_num < 0 else from_model_num
+    models = [m for m in fsdb.get_models() if m[0] >= from_model_num]
+    for _, model in models:
+        _rsync_dir(os.path.join(
+            source_dir, model), os.path.join(dest_dir, model))
 
-def make_chunk_for(
-      output_dir=LOCAL_DIR, local_dir=LOCAL_DIR,
-      chunk_name='chunk', threads=8, samples_per_game=4, num_shards=10):
+
+def _rsync_dir(source_dir, dest_dir):
+    ensure_dir_exists(dest_dir)
+    with open('.rsync_log', 'ab') as rsync_log:
+        subprocess.call(['gsutil', '-m', 'rsync', source_dir, dest_dir],
+                        stderr=rsync_log)
+
+
+def fill_and_wait(bufsize=dual_net.EXAMPLES_PER_GENERATION,
+                  write_dir=None,
+                  model_window=100,
+                  threads=8,
+                  skip_first_rsync=False):
+    """ Fills a ringbuffer with positions from the most recent games, then
+    continually rsync's and updates the buffer until a new model is promoted.
+    Once it detects a new model, iit then dumps its contents for training to
+    immediately begin on the next model.
     """
-    Explicitly make a golden chunk
+    write_dir = write_dir or fsdb.golden_chunk_dir()
+    buf = ExampleBuffer(bufsize)
+    models = fsdb.get_models()[-model_window:]
+    # Last model is N.  N+1 is training.  We should gather games for N+2.
+    chunk_to_make = os.path.join(write_dir, str(
+        models[-1][0] + 2) + '.tfrecord.zz')
+    while tf.gfile.Exists(chunk_to_make):
+        print("Chunk for next model ({}) already exists.  Sleeping.".format(chunk_to_make))
+        time.sleep(5 * 60)
+        models = fsdb.get_models()[-model_window:]
+    print("Making chunk:", chunk_to_make)
+    if not skip_first_rsync:
+        with timer("Rsync"):
+            smart_rsync(models[-1][0] - 6)
+    files = tqdm(map(files_for_model, models), total=len(models))
+    buf.parallel_fill(list(itertools.chain(*files)), threads=threads)
+
+    print("Filled buffer, watching for new games")
+    while fsdb.get_latest_model()[0] == models[-1][0]:
+        with timer("Rsync"):
+            smart_rsync(models[-1][0] - 2)
+        new_files = tqdm(map(files_for_model, models[-2:]), total=len(models))
+        buf.update(list(itertools.chain(*new_files)))
+        time.sleep(60)
+    latest = fsdb.get_latest_model()
+
+    print("New model!", latest[1], "!=", models[-1][1])
+    print(buf)
+    buf.flush(os.path.join(write_dir, str(latest[0] + 1) + '.tfrecord.zz'))
+
+
+def make_chunk_for(output_dir=LOCAL_DIR,
+                   local_dir=LOCAL_DIR,
+                   game_dir=None,
+                   model_num=1,
+                   positions=dual_net.EXAMPLES_PER_GENERATION,
+                   threads=8,
+                   samples_per_game=4):
     """
+    Explicitly make a golden chunk for a given model `model_num`
+    (not necessarily the most recent one).
+
+      While we haven't yet got enough samples (EXAMPLES_PER_GENERATION)
+      Add samples from the games of previous model.
+    """
+    game_dir = game_dir or fsdb.selfplay_dir()
     ensure_dir_exists(output_dir)
+    models = [(num, name)
+              for num, name in fsdb.get_models() if num < model_num]
+    buf = ExampleBuffer(positions)
     files = []
-    for filename in os.listdir(local_dir):
-        if filename.endswith('.tfrecord.zz'):
-            path = os.path.join(local_dir, filename)
-            files.append(path)
+    for _, model in sorted(models, reverse=True):
+        local_model_dir = os.path.join(local_dir, model)
+        if not tf.gfile.Exists(local_model_dir):
+            print("Rsyncing", model)
+            _rsync_dir(os.path.join(
+                game_dir, model), local_model_dir)
+        files.extend(tf.gfile.Glob(os.path.join(local_model_dir, '*.zz')))
+        if len(files) * samples_per_game > positions:
+            break
 
-    print ("Filling from {} files".format(len(files)))
-    BigShuffle.shuffle_and_collect(
-            chunk_name + '.tfrecord.zz',
-            files,
-            threads=threads,
-            samples_per_game=samples_per_game,
-            num_shards=num_shards)
+    print("Filling from {} files".format(len(files)))
+
+    buf.parallel_fill(files, threads=threads,
+                      samples_per_game=samples_per_game)
+    print(buf)
+    output = os.path.join(output_dir, str(model_num) + '.tfrecord.zz')
+    print("Writing to", output)
+    buf.flush(output)
 
 
 parser = argparse.ArgumentParser()
-#argh.add_commands(parser, [fill_and_wait, smart_rsync, make_chunk_for])
-argh.add_commands(parser, [make_chunk_for])
+argh.add_commands(parser, [fill_and_wait, smart_rsync, make_chunk_for])
 
 if __name__ == "__main__":
     import sys

@@ -68,18 +68,17 @@ def supervised():
     bootstrap_save_path = os.path.join(model_dir, '000000-bootstrap')
     main.bootstrap(working_dir, bootstrap_save_path)
 
-    save_points = [1,10,50,100,200,300,400,500,600,700,800,900,1000]
+    epochs_points = [1,2,4,10,20,50,80,98,99,100]
     last = 0
-    for generation in save_points:
+    for epochs in save_points:
         model_name = "{:06d}-supervised-{}x{}-{}".format(
-            generation, layers, filters, machine)
+            epochs, layers, filters, machine)
         print("Training {}!".format(model_name))
         model_save_path = os.path.join(model_dir, model_name)
 
-        delta_gen = generation - last
-        last = generation
-        steps = (dual_net.EXAMPLES_PER_GENERATION // FLAGS.train_batch_size) * delta_gen
-        main.train_dir(working_dir, pro_dir, model_save_path, steps=steps)
+        delta_epochs = epochs - last
+        last = epochs
+        main.train_dir(working_dir, pro_dir, model_save_path, epochs=delta_epochs)
 
         print("Validate on 'holdout' data")
         main.validate(working_dir, holdout_dir, checkpoint_name=model_save_path, validate_name="test")

@@ -78,22 +78,22 @@ def train_dir(
         working_dir: 'tf.estimator working directory.',
         chunk_dir: 'Directory where training chunks are.',
         model_save_path: 'Where to export the completed generation.',
-        steps=None):
+        epochs=None):
     tf_records = sorted(gfile.Glob(os.path.join(chunk_dir, '*.tfrecord.zz')))
-    #tf_records = tf_records[-1 * (WINDOW_SIZE // EXAMPLES_PER_RECORD):]
+    tf_records = tf_records[-1 * (WINDOW_SIZE // EXAMPLES_PER_RECORD):]
 
-    train(working_dir, tf_records, model_save_path, steps)
+    train(working_dir, tf_records, model_save_path, epochs=epochs)
 
 
 def train(
         working_dir: 'tf.estimator working directory.',
         tf_records: 'list of files of tf_records to train on',
         model_save_path: 'Where to export the completed generation.',
-        steps=None):
-    print("Training on {} records : {} to {}, {} steps".format(
-        len(tf_records), tf_records[0], tf_records[-1], steps))
+        epochs=None):
+    print("Training on {} records : {} to {}, {} epochs".format(
+        len(tf_records), tf_records[0], tf_records[-1], epochs))
     with utils.logged_timer("Training"):
-        dual_net.train(working_dir, tf_records, steps=steps)
+        dual_net.train(working_dir, tf_records, epochs=epochs)
     print("== Training done.  Exporting model to ", model_save_path)
     dual_net.export_model(working_dir, model_save_path)
     freeze_graph(model_save_path)
@@ -197,7 +197,7 @@ def preprocess(
     print ("Found {} SGFs".format(len(files)))
 
     if threads <= 1:
-        for i, data in enumerate(tqdm(files)):
+        for data in tqdm(files):
             _create_tfr(data)
     else:
         with multiprocessing.Pool(threads) as p:

@@ -28,16 +28,6 @@ import tensorflow as tf
 TF_RECORD_CONFIG = tf.python_io.TFRecordOptions(
     tf.python_io.TFRecordCompressionType.ZLIB)
 
-# The shuffle buffer size determines how far an example could end up from
-# where it started; this and the interleave parameters in preprocessing can give
-# us an approximation of a uniform sampling.  The default of 4M is used in
-# training, but smaller numbers can be used for aggregation or validation.
-
-# This is choosen based on how many pro games I had.
-SHUFFLE_BUFFER_SIZE = int(50000)
-
-# Constructing tf.Examples
-
 
 def _one_hot(index):
     onehot = np.zeros([go.N * go.N + 1], dtype=np.float32)
@@ -195,7 +185,6 @@ def get_input_tensors(batch_size, tf_records, num_repeats=None,
     dataset = dataset.filter(lambda t: tf.equal(tf.shape(t)[0], batch_size))
     dataset = dataset.map(functools.partial(
         batch_parse_tf_example, batch_size))
-    return dataset.make_one_shot_iterator().get_next()
     if random_rotation:
         dataset = dataset.map(_random_rotation)
 
