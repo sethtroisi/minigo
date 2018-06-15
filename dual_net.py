@@ -190,16 +190,18 @@ def model_fn(features, labels, mode, params=None):
         logits: [BATCH_SIZE, go.N * go.N + 1]
     '''
 
-    policy_output, value_output, logits = model_inference_fn(
+    policy_output, value_output, policy_logits = model_inference_fn(
         features, mode == tf.estimator.ModeKeys.TRAIN)
 
     # train ops
     global_step = tf.train.get_or_create_global_step()
     policy_cost = tf.reduce_mean(
         tf.nn.softmax_cross_entropy_with_logits_v2(
-            logits=logits, labels=tf.stop_gradient(labels['pi_tensor'])))
+            logits=policy_logits, labels=tf.stop_gradient(labels['pi_tensor'])))
     value_cost = FLAGS.value_head_loss_scalar * tf.reduce_mean(
-        tf.square(value_output - labels['value_tensor']))
+        tf.square(value_output - tf.stop_gradient(labels['value_tensor'])))
+    print ("training on "
+        [v for v in tf.trainable_variables() if not 'bias' in v.name])
     l2_cost = FLAGS.l2_strength * tf.add_n([
         tf.nn.l2_loss(v)
         for v in tf.trainable_variables() if not 'bias' in v.name])
@@ -209,8 +211,7 @@ def model_fn(features, labels, mode, params=None):
     learning_rate = tf.train.piecewise_constant(
         global_step, boundaries, values)
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-    optimizer = tf.train.MomentumOptimizer(
-        learning_rate, FLAGS.sgd_momentum)
+    optimizer = tf.train.MomentumOptimizer(learning_rate, FLAGS.sgd_momentum)
     if FLAGS.use_tpu:
         optimizer = tpu_optimizer.CrossShardOptimizer(optimizer)
     with tf.control_dependencies(update_ops):
@@ -291,20 +292,31 @@ def model_inference_fn(features, training):
         training: True if the model is training.
 
     Returns:
-        (policy_output, value_output, logits) tuple of tensors.
+        (policy_output, value_output, policy_logits) tuple of tensors.
     """
 
     my_batchn = functools.partial(
         tf.layers.batch_normalization,
-        momentum=.997, epsilon=1e-5, fused=True, center=True, scale=True,
-        training=training)
+        axis=-1,  # NHWC
+        momentum=.997,
+        epsilon=1e-5,
+        center=True,
+        scale=True,
+        training=training,
+        fused=True)
 
     my_conv2d = functools.partial(
         tf.layers.conv2d,
-        filters=FLAGS.conv_width, kernel_size=[3, 3], padding="same")
+        filters=FLAGS.conv_width,
+        kernel_size=3,
+        padding="same",
+        data_format='channels_last',
+        use_bias=False)
 
     def my_res_layer(inputs):
         int_layer1 = my_batchn(my_conv2d(inputs))
+        # https://www.tensorflow.org/api_docs/python/tf/contrib/layers/batch_norm
+        # says ^ my_batchn can have scale=False
         initial_output = tf.nn.relu(int_layer1)
         int_layer2 = my_batchn(my_conv2d(initial_output))
         output = tf.nn.relu(inputs + int_layer2)
@@ -319,17 +331,19 @@ def model_inference_fn(features, training):
 
     # policy head
     policy_conv = tf.nn.relu(my_batchn(
-        my_conv2d(shared_output, filters=2, kernel_size=[1, 1]),
+        my_conv2d(shared_output, filters=2, kernel_size=1),
+        # Why False??
         center=False, scale=False))
-    logits = tf.layers.dense(
+    policy_logits = tf.layers.dense(
         tf.reshape(policy_conv, [-1, go.N * go.N * 2]),
         go.N * go.N + 1)
 
-    policy_output = tf.nn.softmax(logits, name='policy_output')
+    policy_output = tf.nn.softmax(policy_logits, name='policy_output')
 
     # value head
     value_conv = tf.nn.relu(my_batchn(
-        my_conv2d(shared_output, filters=1, kernel_size=[1, 1]),
+        my_conv2d(shared_output, filters=1, kernel_size=1),
+        # Why False??
         center=False, scale=False))
     value_fc_hidden = tf.nn.relu(tf.layers.dense(
         tf.reshape(value_conv, [-1, go.N * go.N]),
@@ -338,7 +352,7 @@ def model_inference_fn(features, training):
         tf.reshape(tf.layers.dense(value_fc_hidden, 1), [-1]),
         name='value_output')
 
-    return policy_output, value_output, logits
+    return policy_output, value_output, policy_logits
 
 
 def get_estimator(working_dir):
@@ -425,14 +439,14 @@ def train(working_dir, *tf_records, steps=None, epochs=None):
                 FLAGS.train_batch_size,
                 tf_records,
                 filter_amount=1.0,
-                num_repeats=epochs
+                num_repeats=epochs,
                 shuffle_buffer_size=FLAGS.shuffle_buffer_size,)
 
         hooks = [UpdateRatioSessionHook(working_dir),
                  EchoStepCounterHook(output_dir=working_dir)]
 
-    if steps is None:
-        steps = EXAMPLES_PER_GENERATION // FLAGS.train_batch_size
+    #if steps is None:
+    #    steps = EXAMPLES_PER_GENERATION // FLAGS.train_batch_size
 
     print("Training, steps = {}, epochs = {}".format(steps, epochs))
     estimator.train(input_fn, steps=steps, hooks=hooks)

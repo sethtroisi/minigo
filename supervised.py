@@ -35,9 +35,9 @@ def supervised():
     assert len(sys.argv) >= 4, ("Three Args: layers, filters, machine | got:", sys.argv[1:])
     layers, filters, machine = map(int, sys.argv[1:4])
 
-    value_mult = 100
+    value_mult = 0.01
     if len(sys.argv) >= 5:
-        value_mult = int(sys.argv[4])
+        value_mult = float(sys.argv[4])
 
 
     FLAGS.trunk_layers = layers
@@ -54,8 +54,9 @@ def supervised():
     holdout_dir = "data/kgs_holdouts"
 
     name = "{}-{}-{}".format(layers, filters, machine)
-    if value_mult != 100:
-        name = "{}-{}-{}-{}".format(layers, filters, value_mult, machine)
+    display_value_mult = int(round(1 / value_mult))
+    if display_value_mult != 100:
+        name = "{}-{}-{}-{}".format(layers, filters, display_value_mult, machine)
 
     base_dir = "supervised/{}/".format(name)
     working_dir = os.path.join(base_dir, 'models_in_training')
@@ -68,9 +69,8 @@ def supervised():
     bootstrap_save_path = os.path.join(model_dir, '000000-bootstrap')
     main.bootstrap(working_dir, bootstrap_save_path)
 
-    epochs_points = [1,2,4,10,20,50,80,98,99,100]
     last = 0
-    for epochs in save_points:
+    for epochs in [1,2,4,10,20,50,80,98,99,100]:
         model_name = "{:06d}-supervised-{}x{}-{}".format(
             epochs, layers, filters, machine)
         print("Training {}!".format(model_name))
