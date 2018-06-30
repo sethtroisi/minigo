@@ -7,6 +7,7 @@ import multiprocessing as mp
 import os
 import random
 import subprocess
+import tempfile
 import time
 from collections import deque
 
@@ -190,7 +191,6 @@ def make_chunk_for(output_dir=LOCAL_DIR,
     game_dir = game_dir or fsdb.selfplay_dir()
     ensure_dir_exists(output_dir)
     models = [model for model in fsdb.get_models() if model[0] < model_num]
-    buf = ExampleBuffer(positions, samples_per_game=samples_per_game)
     files = []
     for _, model in sorted(models, reverse=True):
         local_model_dir = os.path.join(local_dir, model)
@@ -202,17 +202,64 @@ def make_chunk_for(output_dir=LOCAL_DIR,
         if len(files) * samples_per_game > positions:
             break
 
-    print("Filling from {} files".format(len(files)))
+    output = os.path.join(output_dir, str(model_num) + '.tfrecord.zz')
+    _write_chunk(files, output, threads, samples_per_game)
 
+def make_chunk_of_sgf_dir(game_dir,
+                          chunk_name,
+                          positions=dual_net.EXAMPLES_PER_GENERATION,
+                          threads=8,
+                          samples_per_game=4):
+    assert chunk_name.endswith('.tfrecord.zz'), chunk_name
+
+    if not tf.gfile.Exists(game_dir):
+        print ("game_dir {} not found".format(game_dir))
+
+    with tempfile.TemporaryDirectory() as record_dir:
+        sgfs = []
+        records = []
+        for root, dirs, files in tf.gfile.Walk(game_dir):
+            for name in files:
+                if name.endswith('.sgf'):
+                    sgfs.append(os.path.join(root, name))
+                    record_name = name[:-4] + '.tfrecord.zz'
+                    records.append(os.path.join(record_dir, record_name))
+
+        # converting sgfs to tfrecords in the temp directory
+        print ("Converting sgfs to tfrecords,", record_dir)
+        with mp.Pool(threads) as pool:
+            records = list(tqdm(
+                pool.imap(_process_sgf_to_record, zip(sgfs, records)),
+                total=len(sgfs)))
+
+        records = filter(None.__ne__, records)
+        ensure_dir_exists(os.path.basename(chunk_name))
+        _write_chunk(records, chunk_name, positions, threads, samples_per_game)
+
+
+def _process_sgf_to_record(pair):
+    try:
+        preprocessing.make_dataset_from_sgf(*pair)
+    except Exception as e:
+        print("Processing {} failed".format(pair[0]))
+        print(e)
+        return None
+    return pair[1]
+
+
+def _write_chunk(files, output, positions, threads, samples_per_game):
+    print("Filling from {} files".format(len(files)))
+    buf = ExampleBuffer(positions, samples_per_game=samples_per_game)
     buf.parallel_fill(files, threads=threads)
     print(buf)
-    output = os.path.join(output_dir, str(model_num) + '.tfrecord.zz')
     print("Writing to", output)
     buf.flush(output)
 
 
 parser = argparse.ArgumentParser()
-argh.add_commands(parser, [fill_and_wait, smart_rsync, make_chunk_for])
+argh.add_commands(parser, [
+    fill_and_wait, smart_rsync, make_chunk_for, make_chunk_of_sgf_dir
+])
 
 if __name__ == "__main__":
     import sys
