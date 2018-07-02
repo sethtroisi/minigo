@@ -24,6 +24,7 @@ import symmetries
 
 import numpy as np
 import tensorflow as tf
+from tqdm import tqdm
 
 TF_RECORD_CONFIG = tf.python_io.TFRecordOptions(
     tf.python_io.TFRecordCompressionType.ZLIB)
@@ -63,7 +64,11 @@ def write_tf_examples(filename, tf_examples, serialize=True):
     '''
     with tf.python_io.TFRecordWriter(
             filename, options=TF_RECORD_CONFIG) as writer:
-        for ex in tf_examples:
+        iterable = tf_examples:
+        if isinstance(x,(list,)) and len(tf_examples) > 1000:
+            iterable = tqdm(tf_examples)
+
+        for ex in iterable:
             if serialize:
                 writer.write(ex.SerializeToString())
             else:

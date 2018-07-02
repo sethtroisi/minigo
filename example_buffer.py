@@ -46,7 +46,10 @@ def choose(game, samples_per_game=4):
 
 
 def file_timestamp(filename):
-    return int(os.path.basename(filename).split('-')[0])
+    try:
+        return int(os.path.basename(filename).split('-')[0])
+    except:
+        return 0
 
 
 def _ts_to_str(timestamp):
@@ -150,7 +153,8 @@ def fill_and_wait(bufsize=dual_net.EXAMPLES_PER_GENERATION,
     chunk_to_make = os.path.join(write_dir, str(
         models[-1][0] + 2) + '.tfrecord.zz')
     while tf.gfile.Exists(chunk_to_make):
-        print("Chunk for next model ({}) already exists.  Sleeping.".format(chunk_to_make))
+        print("Chunk for next model ({}) already exists.  Sleeping.".format(
+            chunk_to_make))
         time.sleep(5 * 60)
         models = fsdb.get_models()[-model_window:]
     print("Making chunk:", chunk_to_make)
@@ -205,6 +209,7 @@ def make_chunk_for(output_dir=LOCAL_DIR,
     output = os.path.join(output_dir, str(model_num) + '.tfrecord.zz')
     _write_chunk(files, output, threads, samples_per_game)
 
+
 def make_chunk_of_sgf_dir(game_dir,
                           chunk_name,
                           positions=dual_net.EXAMPLES_PER_GENERATION,
@@ -213,7 +218,7 @@ def make_chunk_of_sgf_dir(game_dir,
     assert chunk_name.endswith('.tfrecord.zz'), chunk_name
 
     if not tf.gfile.Exists(game_dir):
-        print ("game_dir {} not found".format(game_dir))
+        print("game_dir {} not found".format(game_dir))
 
     with tempfile.TemporaryDirectory() as record_dir:
         sgfs = []
@@ -226,13 +231,13 @@ def make_chunk_of_sgf_dir(game_dir,
                     records.append(os.path.join(record_dir, record_name))
 
         # converting sgfs to tfrecords in the temp directory
-        print ("Converting sgfs to tfrecords,", record_dir)
+        print("Converting sgfs to tfrecords in", record_dir)
         with mp.Pool(threads) as pool:
             records = list(tqdm(
                 pool.imap(_process_sgf_to_record, zip(sgfs, records)),
                 total=len(sgfs)))
 
-        records = filter(None.__ne__, records)
+        records = list(filter(None.__ne__, records))
         ensure_dir_exists(os.path.basename(chunk_name))
         _write_chunk(records, chunk_name, positions, threads, samples_per_game)
 

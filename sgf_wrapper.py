@@ -168,7 +168,6 @@ def replay_sgf(sgf_contents):
         pos = handle_node(pos, current_node)
         maybe_correct_next(pos, current_node.next)
         next_move = get_next_move(current_node)
-        print ("hi", next_move, result)
         yield PositionWithContext(pos, next_move, result)
         current_node = current_node.next
 
