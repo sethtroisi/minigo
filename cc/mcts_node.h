@@ -27,6 +27,10 @@
 #include "cc/constants.h"
 #include "cc/position.h"
 
+#include "gflags/gflags.h"
+
+DECLARE_double(scaling_puct_strength);
+
 namespace minigo {
 
 class MctsNode {

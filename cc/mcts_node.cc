@@ -23,6 +23,11 @@
 #include <utility>
 
 #include "cc/algorithm.h"
+#include "gflags/gflags.h"
+
+DEFINE_double(scaling_puct_strength, 0.0,
+              "How much to decrease c_puct based on current Q.");
+
 
 namespace minigo {
 
@@ -272,7 +277,18 @@ void MctsNode::PruneChildren(Coord c) {
 
 std::array<float, kNumMoves> MctsNode::CalculateChildActionScore() const {
   float to_play = position.to_play() == Color::kBlack ? 1 : -1;
-  float U_scale = kPuct * std::sqrt(1.0f + N());
+  // Basically the idea is that Q is accurate but worth less when
+  // small.
+
+  // Q is more accurate as time goes on so decrease c_puct w.r.t Q.
+
+  // When Q is extreme the changes are smaller so you need to compress
+  // P to allow exploration of moves.
+
+  // For first test aim to reduce U_scale by factor of 2 over the midgame
+  float U_inv_scale = 1 / (1 + FLAGS_scaling_puct_strength * std::abs(Q()));
+
+  float U_scale = U_inv_scale * kPuct * std::sqrt(1.0f + N());
 
   std::array<float, kNumMoves> result;
   for (int i = 0; i < kNumMoves; ++i) {

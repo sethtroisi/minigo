@@ -117,6 +117,7 @@ minigo_cc_library(
         ":random",
         ":symmetries",
         "//cc/dual_net",
+        "@com_github_gflags_gflags//:gflags",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
