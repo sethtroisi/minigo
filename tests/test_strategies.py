@@ -174,7 +174,7 @@ class TestMCTSPlayer(test_utils.MiniGoUnitTest):
         self.assertGreater(player.root.children[flattened].Q, 0)
         self.assertGreaterEqual(player.root.N, 20)
         # passing should be ineffective.
-        self.assertLess(player.root.child_Q[-1], 0)
+        self.assertLess(player.root._child_Q[-1], 0)
         # no virtual losses should be pending
         self.assertNoPendingVirtualLosses(player.root)
         # uncomment to debug this test
@@ -201,7 +201,7 @@ class TestMCTSPlayer(test_utils.MiniGoUnitTest):
         self.assertGreater(player.root.children[flattened].Q, 0)
         self.assertGreaterEqual(player.root.N, 20)
         # passing should be ineffective.
-        self.assertLess(player.root.child_Q[-1], 0)
+        self.assertLess(player.root._child_Q[-1], 0)
         # no virtual losses should be pending
         self.assertNoPendingVirtualLosses(player.root)
 

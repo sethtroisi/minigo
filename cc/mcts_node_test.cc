@@ -104,7 +104,6 @@ TEST(MctsNodeTest, BackupIncorporateResults) {
   EXPECT_EQ(leaf->N(), 1);
   // And that leaf's value had its parent's Q (0) as a prior, so the Q
   // should now be the average of 0, -1
-  EXPECT_FLOAT_EQ(root.child_Q(leaf->move), -0.5);
   EXPECT_FLOAT_EQ(leaf->Q(), -0.5);
 
   // We're assuming that SelectLeaf() returns a leaf like:
@@ -124,11 +123,53 @@ TEST(MctsNodeTest, BackupIncorporateResults) {
   EXPECT_EQ(leaf->N(), 2);
   EXPECT_EQ(leaf2->N(), 1);
   // average of 0, -1, -0.2
-  EXPECT_FLOAT_EQ(leaf->Q(), root.child_Q(leaf->move));
   EXPECT_FLOAT_EQ(leaf->Q(), -0.4);
-  // average of -1, -0.2
-  EXPECT_FLOAT_EQ(leaf->child_Q(leaf2->move), -0.6);
-  EXPECT_FLOAT_EQ(leaf2->Q(), -0.6);
+  // average of 0, -0.2
+  EXPECT_FLOAT_EQ(leaf2->Q(), -0.1);
+}
+
+// Verifies Child_U updates from Parent Q.
+TEST(MctsNodeTest, ChildUUpdatesFromParentQ) {
+  std::array<float, kNumMoves> probs;
+  for (float& prob : probs) {
+    prob = 0.02;
+  }
+
+  MctsNode::EdgeStats root_stats;
+  auto board = TestablePosition(kAlmostDoneBoard, Color::kWhite);
+  MctsNode root(&root_stats, board);
+  root.SelectLeaf()->IncorporateResults(probs, -0.5, &root);
+
+  // Select two adjacent leaf nodes.
+  auto* leaf1 = root.SelectLeaf();
+  leaf1->AddVirtualLoss(&root);
+  auto* leaf2 = root.SelectLeaf();
+  leaf1->RevertVirtualLoss(&root);
+
+  // Not the same leaf
+  EXPECT_NE(leaf1, leaf2);
+  EXPECT_EQ(leaf1->parent, leaf1->parent);
+
+  // N is incremented when SelectLeaf is called to find Leaf1 and leaf2.
+  EXPECT_EQ(root.N(), 3);
+  EXPECT_FLOAT_EQ(root.Q(), -0.5/4);
+  EXPECT_FLOAT_EQ(leaf1->Q(), 0);
+  EXPECT_FLOAT_EQ(leaf2->Q(), 0);
+  // Leaf1 and leaf2 have already incremented N from select_leaf.
+  EXPECT_FLOAT_EQ(root.child_Q(leaf1->move), root.Q()/2);
+  EXPECT_FLOAT_EQ(root.child_Q(leaf2->move), root.Q()/2);
+
+  leaf1->IncorporateResults(probs, -1, &root);  // white wins!
+
+  // Leaf1 and root incorporate result directly into Q
+  EXPECT_FLOAT_EQ(root.Q(), -1.5 / 4);
+  EXPECT_FLOAT_EQ(leaf1->Q(), -0.5);
+  // Leaf2 is unchanged.
+  EXPECT_FLOAT_EQ(leaf2->Q(), 0);
+
+  // Child_Q used for action score is updated for both children.
+  EXPECT_FLOAT_EQ(root.child_Q(leaf1->move), (root.Q() + leaf1->W())/2);
+  EXPECT_FLOAT_EQ(root.child_Q(leaf2->move), root.Q()/2);
 }
 
 TEST(MctsNodeTest, DoNotExplorePastFinish) {

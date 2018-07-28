@@ -18,7 +18,6 @@ All terminology here (Q, U, N, p_UCT) uses the same notation as in the
 AlphaGo (AG) paper.
 """
 
-import collections
 import math
 
 from absl import flags
@@ -54,8 +53,9 @@ class DummyNode(object):
 
     def __init__(self):
         self.parent = None
-        self.child_N = collections.defaultdict(float)
-        self.child_W = collections.defaultdict(float)
+        # child will access N / W by looking up fmove = None in these dicts.
+        self.child_N = {None: 0.0}
+        self.child_W = {None: 0.0}
 
 
 class MCTSNode(object):
@@ -94,13 +94,21 @@ class MCTSNode(object):
 
     @property
     def child_action_score(self):
-        return (self.child_Q * self.position.to_play
+        return (self._child_Q * self.position.to_play
             + self.child_U
             - 1000 * self.illegal_moves)
 
     @property
-    def child_Q(self):
-        return self.child_W / (1 + self.child_N)
+    def _child_Q(self):
+        """Use only for child_action_score, includes parent Q."""
+
+        # Average child Q with current node's Q, to prevent dynamics where
+        # if B is winning, then B will only ever explore 1 move, because the Q
+        # estimation will be so much larger than the 0 of the other moves.
+        #
+        # Conversely, if W is winning, then B will explore all 362 moves before
+        # continuing to explore the most favorable move. This is a waste of search.
+        return (self.Q + self.child_W) / (1 + self.child_N)
 
     @property
     def child_U(self):
@@ -218,15 +226,6 @@ class MCTSNode(object):
             move_probs *= 1 / scale
 
         self.original_prior = self.child_prior = move_probs
-        # initialize child Q as current node's value, to prevent dynamics where
-        # if B is winning, then B will only ever explore 1 move, because the Q
-        # estimation will be so much larger than the 0 of the other moves.
-        #
-        # Conversely, if W is winning, then B will explore all 362 moves before
-        # continuing to explore the most favorable move. This is a waste of search.
-        #
-        # The value seeded here acts as a prior, and gets averaged into Q calculations.
-        self.child_W = np.ones([go.N * go.N + 1], dtype=np.float32) * value
         self.backup_value(value, up_to=up_to)
 
     def backup_value(self, value, up_to):
@@ -264,7 +263,7 @@ class MCTSNode(object):
         probs = self.child_N
         if squash:
             probs = probs ** .98
-        return probs / np.sum(probs)
+        return probs / (np.sum(probs) + 1e-5)
 
     def most_visited_path_nodes(self):
         node = self
@@ -324,7 +323,7 @@ class MCTSNode(object):
             output.append("\n{!s:4} : {: .3f} {: .3f} {:.3f} {:.3f} {:.3f} {:5d} {:.4f} {: .5f} {: .2f}".format(
                 coords.to_kgs(coords.from_flat(key)),
                 self.child_action_score[key],
-                self.child_Q[key],
+                self._child_Q[key],
                 self.child_U[key],
                 self.child_prior[key],
                 self.original_prior[key],

@@ -215,17 +215,7 @@ void MctsNode::IncorporateResults(absl::Span<const float> move_probabilities,
         illegal_moves[i] ? 0 : policy_scalar * move_probabilities[i];
 
     edges[i].original_P = edges[i].P = move_prob;
-    // Initialize child Q as current node's value, to prevent dynamics where
-    // if B is winning, then B will only ever explore 1 move, because the Q
-    // estimation will be so much larger than the 0 of the other moves.
-    //
-    // Conversely, if W is winning, then B will explore all 362 moves before
-    // continuing to explore the most favorable move. This is a waste of
-    // search.
-    //
-    // The value seeded here acts as a prior, and gets averaged into Q
-    // calculations.
-    edges[i].W = value;
+    edges[i].W = 0;
   }
   BackupValue(value, up_to);
 }

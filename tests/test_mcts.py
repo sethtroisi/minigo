@@ -103,7 +103,6 @@ class TestMctsNodes(test_utils.MiniGoUnitTest):
         self.assertEqual(leaf.N, 1)
         # And that leaf's value had its parent's Q (0) as a prior, so the Q
         # should now be the average of 0, -1
-        self.assertAlmostEqual(root.child_Q[leaf.fmove], -0.5)
         self.assertAlmostEqual(leaf.Q, -0.5)
 
         # We're assuming that select_leaf() returns a leaf like:
@@ -123,11 +122,45 @@ class TestMctsNodes(test_utils.MiniGoUnitTest):
         self.assertEqual(leaf.N, 2)
         self.assertEqual(leaf2.N, 1)
         # average of 0, -1, -0.2
-        self.assertAlmostEqual(leaf.Q, root.child_Q[leaf.fmove])
         self.assertAlmostEqual(leaf.Q, -0.4)
-        # average of -1, -0.2
-        self.assertAlmostEqual(leaf.child_Q[leaf2.fmove], -0.6)
-        self.assertAlmostEqual(leaf2.Q, -0.6)
+
+        # average of 0, -0.2
+        self.assertAlmostEqual(leaf2.Q, -0.1)
+
+    def test_child_U_updates_from_parent_q(self):
+        probs = np.array([.02] * (go.N * go.N + 1))
+        root = mcts.MCTSNode(SEND_TWO_RETURN_ONE)
+        root.select_leaf().incorporate_results(probs, -0.5, root)
+
+        # Select two adjacent leaf nodes.
+        leaf1 = root.select_leaf()
+        leaf1.add_virtual_loss(up_to=root)
+        leaf2 = root.select_leaf()
+        leaf1.revert_virtual_loss(up_to=root)
+
+        assert leaf1 != leaf2
+        assert leaf1.parent == leaf2.parent
+
+        # N is incremented when SelectLeaf is called to find leaf1 and leaf2.
+        self.assertAlmostEqual(root.N, 3)
+        self.assertAlmostEqual(root.Q, -0.5/4)
+        self.assertAlmostEqual(leaf1.Q, 0)
+        self.assertAlmostEqual(leaf2.Q, 0)
+        # Leaf1 and leaf2 have already incremented N from select_leaf.
+        self.assertAlmostEqual(root._child_Q[leaf1.fmove], root.Q/2)
+        self.assertAlmostEqual(root._child_Q[leaf2.fmove], root.Q/2)
+
+        leaf1.incorporate_results(probs, -1, root)  # white wins!
+
+        # Leaf1 and root incorporate result directly into Q.
+        self.assertAlmostEqual(root.Q, -1.5/4)
+        self.assertAlmostEqual(leaf1.Q, -1/2)
+        # Leaf2 is unchanged.
+        self.assertAlmostEqual(leaf2.Q, 0)
+
+        # Child_Q used for action score is updated for both children.
+        self.assertAlmostEqual(root._child_Q[leaf1.fmove], (root.Q + leaf1.W)/2)
+        self.assertAlmostEqual(root._child_Q[leaf2.fmove], root.Q/2)
 
     def test_do_not_explore_past_finish(self):
         probs = np.array([0.02] * (go.N * go.N + 1), dtype=np.float32)

@@ -62,7 +62,13 @@ class MctsNode {
   float child_W(int i) const { return edges[i].W; }
   float child_P(int i) const { return edges[i].P; }
   float child_original_P(int i) const { return edges[i].original_P; }
-  float child_Q(int i) const { return child_W(i) / (1 + child_N(i)); }
+  float child_Q(int i) const {
+    // Child Q is the weighted average of parent_Q and Q's explored beneath it.
+    // This works better than init-to-0 or init-to-static-parent-q because
+    // it updates explore/exploit as the parent Q evolves, this is espectially
+    // important for children with 0 visit.
+    return (Q() + child_W(i)) / (1 + child_N(i));
+  }
   float child_U(int i) const {
     return kPuct * std::sqrt(1.0f + N()) * child_P(i) / (1 + child_N(i));
   }
