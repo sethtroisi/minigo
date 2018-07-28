@@ -16,14 +16,22 @@
 import functools
 import random
 
+
 import coords
 import features as features_lib
 import go
 import sgf_wrapper
 import symmetries
 
+from absl import flags
 import numpy as np
 import tensorflow as tf
+
+flags.DEFINE_float('game_result_fumble_prob', 0.0,
+                   'probability of changing the game result')
+
+FLAGS = flags.FLAGS
+
 
 TF_RECORD_CONFIG = tf.python_io.TFRecordOptions(
     tf.python_io.TFRecordCompressionType.ZLIB)
@@ -172,6 +180,20 @@ def _random_rotation_pure_tf(x_tensor, outcome_tensor):
         x_tensor,
         pi_tensor)
 
+    value_tensor = outcome_tensor['value_tensor']
+    sym = tf.random_uniform(
+        [],
+        minval=0,
+        maxval=1
+        dtype=tf.float32,
+        seed=1234)
+
+    value_tensor = tf.where(
+        sym < FLAGS.game_result_fumble_prob,
+        -value_tensor,
+        value_tensor)
+
+    outcome_tensor['value_tensor'] = value_tensor
     outcome_tensor['pi_tensor'] = pi_rot_tensor
     return x_rot_tensor, outcome_tensor
 
