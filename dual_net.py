@@ -470,6 +470,7 @@ def export_model(working_dir, model_path):
 
 
 def train(
+        eval_record: "Eval record",
         *tf_records: "Records to train on",
         steps: "Number of steps to train. If not set iterates over "
                "tf_records and sets steps to examples / batch_size"=-1):
@@ -503,8 +504,21 @@ def train(
                 filter_amount=1.0,
                 shuffle_buffer_size=FLAGS.shuffle_buffer_size,
                 random_rotation=True)
+        def eval_input_fn():
+            return preprocessing.get_input_tensors(
+                FLAGS.train_batch_size,
+                [eval_record],
+                filter_amount=0.02,
+                shuffle_buffer_size=256)
 
-        hooks = [UpdateRatioSessionHook(FLAGS.model_dir),
+        evaluator_hook = tf.contrib.estimator.InMemoryEvaluatorHook(
+            estimator,
+            eval_input_fn,
+            steps=2,
+            name="in-memory-eval-hook",
+            every_n_iter=FLAGS.summary_steps)
+        hooks = [evaluator_hook,
+                 UpdateRatioSessionHook(FLAGS.model_dir),
                  EchoStepCounterHook(output_dir=FLAGS.model_dir)]
 
     print("Training, steps = {}".format(steps))
