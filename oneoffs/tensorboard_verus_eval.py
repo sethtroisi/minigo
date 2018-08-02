@@ -22,119 +22,21 @@ flags.DEFINE_string('base_dir', None, 'Directory of tf events')
 FLAGS = flags.FLAGS
 
 
-TEMP = """model.ckpt-12|001
-model.ckpt-27|002
-model.ckpt-69|003
-model.ckpt-138|004
-model.ckpt-234|005
-model.ckpt-358|006
-model.ckpt-510|007
-model.ckpt-691|008
-model.ckpt-900|009
-model.ckpt-1138|010
-model.ckpt-1405|011
-model.ckpt-1702|012
-model.ckpt-2036|013
-model.ckpt-2462|014
-model.ckpt-2921|015
-model.ckpt-3412|016
-model.ckpt-3933|017
-model.ckpt-4487|018
-model.ckpt-5073|019
-model.ckpt-5692|020
-model.ckpt-6341|021
-model.ckpt-7021|022
-model.ckpt-7733|023
-model.ckpt-8478|024
-model.ckpt-9252|025
-model.ckpt-10063|026
-model.ckpt-10902|027
-model.ckpt-11779|028
-model.ckpt-12687|029
-model.ckpt-13631|030
-model.ckpt-14611|031
-model.ckpt-15625|032
-model.ckpt-16649|033
-model.ckpt-17673|034
-model.ckpt-18697|035
-model.ckpt-19721|036
-model.ckpt-20745|037
-model.ckpt-21769|038
-model.ckpt-22793|039
-model.ckpt-23817|040
-model.ckpt-24841|041
-model.ckpt-25865|042
-model.ckpt-26889|043
-model.ckpt-27913|044
-model.ckpt-28937|045
-model.ckpt-29961|046
-model.ckpt-30985|047
-model.ckpt-32009|048
-model.ckpt-33033|049
-model.ckpt-34057|050
-model.ckpt-35081|051
-model.ckpt-36105|052
-model.ckpt-37129|053
-model.ckpt-38153|054
-model.ckpt-39177|055
-model.ckpt-40201|056
-model.ckpt-41225|057
-model.ckpt-42249|058
-model.ckpt-43273|059
-model.ckpt-44297|060
-model.ckpt-45321|061
-model.ckpt-46345|062
-model.ckpt-47369|063
-model.ckpt-48393|064
-model.ckpt-49417|065
-model.ckpt-50441|066
-model.ckpt-51465|067
-model.ckpt-52489|068
-model.ckpt-53513|069
-model.ckpt-54537|070
-model.ckpt-55561|071
-model.ckpt-56585|072
-model.ckpt-57609|073
-model.ckpt-58633|074
-model.ckpt-59657|075
-model.ckpt-60681|076
-model.ckpt-61705|077
-model.ckpt-62729|078
-model.ckpt-63753|079
-model.ckpt-64777|080
-model.ckpt-65801|081
-model.ckpt-66825|082
-model.ckpt-67849|083
-model.ckpt-68873|084
-model.ckpt-69897|085
-model.ckpt-70921|086
-model.ckpt-71945|087
-model.ckpt-72969|088
-model.ckpt-73993|089
-model.ckpt-75017|090
-model.ckpt-76041|091
-model.ckpt-77065|092
-model.ckpt-78089|093
-model.ckpt-79113|094
-model.ckpt-80137|095
-model.ckpt-81161|096
-model.ckpt-82185|097
-model.ckpt-83209|098
-model.ckpt-84233|099
-model.ckpt-85257|100"""
+TEMP = {138: 4, 234: 5, 358: 6, 510: 7, 691: 8, 900: 9, 1138: 10, 1405: 11, 1702: 12, 2036: 13, 2462: 14, 2921: 15, 3412: 16, 3933: 17, 4487: 18, 5073: 19, 5692: 20, 6341: 21, 7021: 22, 7733: 23, 8478: 24, 9252: 25, 10063: 26, 10902: 27, 11779: 28, 12687: 29, 13631: 30, 14611: 31, 15625: 32, 16649: 33, 17673: 34, 18697: 35, 19721: 36, 20745: 37, 21769: 38, 22793: 39, 23817: 40, 24841: 41, 25865: 42, 26889: 43, 27913: 44, 28937: 45, 29961: 46, 30985: 47, 32009: 48, 33033: 49, 34057: 50,
+35081: 51, 36105: 52, 37129: 53, 38153: 54, 39177: 55, 40201: 56, 41225: 57, 42249: 58, 43273: 59, 44297: 60, 45321: 61, 46345: 62, 47369: 63, 48393: 64, 49417: 65, 50441: 66, 51465: 67, 52489: 68, 53513: 69, 54537: 70, 55561: 71, 56585: 72, 57609: 73, 58633: 74, 59657: 75, 60681: 76, 61705: 77, 62729: 78, 63753: 79, 64777: 80, 65801: 81, 66825: 82, 67849: 83, 68873: 84, 69897: 85, 70921: 86, 71945: 87, 72969: 88, 73993: 89, 75017: 90, 76041: 91, 77065: 92, 78089: 93, 79113: 94, 80137:
+95, 81161: 96, 82185: 97, 83209: 98, 84233: 99, 85257: 100, 86281: 101, 87305: 102, 88329: 103, 89353: 104, 90377: 105, 91401: 106, 92425: 107, 93449: 108, 94473: 109, 95497: 110, 96521: 111, 97545: 112, 98569: 113, 99593: 114, 100617: 115, 101641: 116, 102665: 117, 103689: 118, 104713: 119, 105737: 120, 106761: 121, 107785: 122, 108809: 123, 109833: 124, 110857: 125, 111881: 126, 112905: 127, 113929: 128, 114953: 129, 115977: 130, 117001: 131, 118025: 132, 119049: 133, 120073:
+134, 121097: 135, 122121: 136, 123145: 137, 124169: 138, 125193: 139, 126217: 140, 127241: 141, 128265: 142, 129289: 143, 130313: 144, 131337: 145, 132361: 146, 133385: 147, 134409: 148, 135433: 149, 136457: 150, 137481: 151, 138505: 152, 139529: 153, 140553: 154, 141577: 155, 142601: 156, 143625: 157, 144649: 158, 145673: 159, 146697: 160, 147721: 161, 148745: 162, 149769: 163, 150793: 164, 151817: 165, 152841: 166, 153865: 167, 154889: 168, 155913: 169, 156937: 170, 157961: 171,
+158985: 172, 160009: 173, 161033: 174, 162057: 175, 163081: 176, 164105: 177, 165129: 178, 166153: 179, 167177: 180, 168201: 181, 169225: 182, 170249: 183, 171273: 184, 172297: 185, 173321: 186, 174345: 187, 175369: 188, 176393: 189, 177417: 190, 178441: 191, 179465: 192, 180489: 193, 181513: 194, 182537: 195, 183561: 196, 184585: 197, 185609: 198, 186633: 199, 187657: 200}
+
 
 def correlate(events, evals):
-    global TEMP
-    TEMP = { int(ckpt.split('-')[-1]): int(m)
-        for ckpt, m in [l.split('|') for l in TEMP.split("\n")]}
-
     print("{} events, {} evals".format(len(events), len(evals)))
     # events * x = evals
     eval_vector = []
     events_vector = []
     value_count = Counter()
     parts = ['value_cost', 'policy_cost', 'policy_accuracy_top_1',
-             'policy_accuracy_top_3', 'value_confidence']
+             'policy_accuracy_top_3', 'value_confidence', 'policy_entropy']
     for ckpt, values in sorted(events.items()):
         for v in values.keys():
             value_count[v] += 1
@@ -147,8 +49,8 @@ def correlate(events, evals):
             events_vector.append([values[p] for p in parts])
 
 
-    print (events_vector)
-    print (eval_vector)
+#    print (events_vector)
+#    print (eval_vector)
 
     print(value_count)
     print()
@@ -156,9 +58,10 @@ def correlate(events, evals):
 
     res = np.linalg.lstsq(events_vector, eval_vector, rcond=None)
     residuals = res[1]
+    print (parts)
     print (res[0])
-    print (residuals)
 
+    #print (residuals)
     r2 = 1 - residuals / (len(eval_vector) * np.var(eval_vector))
     print(r2)
 
@@ -173,10 +76,17 @@ def get_all_events(base_dir):
     # We see lots of duplicate entries, just overridding for now
     checkpoint_stats = defaultdict(dict)
 
+    max_temp = max(TEMP.keys())
+
     for event_file in sorted(glob(os.path.join(base_dir, '*tfevents*'))):
         records = list(tf.train.summary_iterator(event_file))
         print(os.path.basename(event_file), len(records))
         for record in records:
+            if record.step > max_temp:
+                break
+            if record.step not in TEMP:
+                continue
+
             what = record.WhichOneof("what")
             #if what not in ("meta_graph_def", "graph_def"):
             if what == "summary":
