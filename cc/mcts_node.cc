@@ -72,9 +72,8 @@ std::string MctsNode::Describe() const {
     child_N_sum += e.N;
   }
   for (int rank = 0; rank < 15; ++rank) {
-    // TODO only print while > 1 child_N
     Coord i = std::get<2>(sort_order[rank]);
-    if (child_N(i) == 0) {
+    if (rank > 0 && child_N(i) == 0) {
         break;
     }
     float soft_N = child_N(i) / child_N_sum;
@@ -96,17 +95,21 @@ std::string MctsNode::Describe() const {
   return oss.str();
 }
 
+Coord MctsNode::TopChild() const {
+  auto child_action_score = CalculateChildActionScore();
+  using SortInfo = std::tuple<float, float, int>;
+  std::array<SortInfo, kNumMoves> sort_order;
+  for (int i = 0; i < kNumMoves; ++i) {
+    sort_order[i] = SortInfo(child_N(i), child_action_score[i], i);
+  }
+  return ArgMax(child_action_score); //, std::greater<SortInfo>());
+}
+
 std::vector<Coord> MctsNode::MostVisitedPath() const {
   std::vector<Coord> path;
   const auto* node = this;
   while (!node->children.empty()) {
-    auto child_action_score = CalculateChildActionScore();
-    using SortInfo = std::tuple<float, float, int>;
-    std::array<SortInfo, kNumMoves> sort_order;
-    for (int i = 0; i < kNumMoves; ++i) {
-      sort_order[i] = SortInfo(child_N(i), child_action_score[i], i);
-    }
-    int next_kid = ArgMax(child_action_score, std::greater<SortInfo>());
+    Coord next_kid = node->TopChild();
     path.push_back(next_kid);
     auto it = node->children.find(next_kid);
     if (it == node->children.end()) {

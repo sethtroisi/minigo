@@ -67,6 +67,9 @@ class MctsNode {
     return kPuct * std::sqrt(1.0f + N()) * child_P(i) / (1 + child_N(i));
   }
 
+  // Top child index by child_n tie break with action score.
+  Coord TopChild() const;
+
   std::string Describe() const;
   std::string MostVisitedPathString() const;
   std::vector<Coord> MostVisitedPath() const;

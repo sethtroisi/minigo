@@ -266,13 +266,13 @@ class MCTSNode(object):
         return probs / np.sum(probs)
 
     def _top_child(self):
-        return np.argmax(self.child_N + self.child_action_score / 1000)
+        # Sort by child_N tie break with action score.
+        return np.argmax(self.child_N + self.child_action_score / 10000)
 
     def most_visited_path_nodes(self):
         node = self
         output = []
         while node.children:
-            # tie break the same way as describe
             next_kid = node._top_child()
             node = node.children.get(next_kid)
             if node is None:
@@ -314,12 +314,9 @@ class MCTSNode(object):
         output.append(self.most_visited_path())
         output.append(
             "move : action    Q     U     P   P-Dir    N  soft-N  p-delta  p-rel")
-
-
-        # I THINK IT's USING SOFT PICK!!!! BECAUSE MAYBE PICKING NOT TOP N?
-        for key in sort_order[:15]:
-            #if self.child_N[key] == 0:
-            #    break
+        for rank, key in enumerate(sort_order[:15]):
+            if rank > 0 and self.child_N[key] == 0:
+                break
             output.append("\n{!s:4} : {: .3f} {: .3f} {:.3f} {:.3f} {:.3f} {:5d} {:.4f} {: .5f} {: .2f}".format(
                 coords.to_kgs(coords.from_flat(key)),
                 self.child_action_score[key],

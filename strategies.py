@@ -174,7 +174,7 @@ class MCTSPlayer(MCTSPlayerInterface):
         Highest N is most robust indicator. In the early stage of the game, pick
         a move weighted by visit count; later on, pick the absolute max.'''
         if self.root.position.n >= self.temp_threshold:
-            # tie break on action scrore
+            # Sort by child_N tie break with action score.
             fcoord = self.root._top_child()
         else:
             cdf = self.root.children_as_pi(squash=True).cumsum()
