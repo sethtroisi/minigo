@@ -149,22 +149,22 @@ class DualNetwork():
         without redifining the entire graph."""
         tf.train.Saver().restore(self.sess, save_file)
 
-    def run(self, position, use_random_symmetry=True):
+    def run(self, position): #, use_random_symmetry=True):
         probs, values = self.run_many([position],
-                                      use_random_symmetry=use_random_symmetry)
+                                      use_random_symmetry=False)
         return probs[0], values[0]
 
-    def run_many(self, positions, use_random_symmetry=True):
+    def run_many(self, positions): #, use_random_symmetry=True):
         processed = list(map(features_lib.extract_features, positions))
-        if use_random_symmetry:
-            syms_used, processed = symmetries.randomize_symmetries_feat(
-                processed)
+        #if use_random_symmetry:
+        #    syms_used, processed = symmetries.randomize_symmetries_feat(
+        #        processed)
         outputs = self.sess.run(self.inference_output,
                                 feed_dict={self.inference_input: processed})
         probabilities, value = outputs['policy_output'], outputs['value_output']
-        if use_random_symmetry:
-            probabilities = symmetries.invert_symmetries_pi(
-                syms_used, probabilities)
+        #if use_random_symmetry:
+        #    probabilities = symmetries.invert_symmetries_pi(
+        #        syms_used, probabilities)
         return probabilities, value
 
 
@@ -347,7 +347,7 @@ def model_inference_fn(features, training):
         kernel_size=3,
         padding="same",
         data_format="channels_last",
-        use_bias=False)
+        use_bias=False) # Toggled to true for local_5_64_test True)
 
     def my_res_layer(inputs):
         int_layer1 = my_batchn(my_conv2d(inputs))
