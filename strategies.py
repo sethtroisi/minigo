@@ -130,6 +130,8 @@ class MCTSPlayer(MCTSPlayerInterface):
         else:
             current_readouts = self.root.N
             while self.root.N < current_readouts + self.num_readouts:
+                print ("Hi suggest_move:", self.root.N)
+                self.root.describe()
                 self.tree_search()
             if self.verbosity > 0:
                 dbg("%d: Searched %d times in %.2f seconds\n\n" % (
