@@ -46,6 +46,9 @@ factory_engine_copts = select({
 }) + select({
     ":enable_tf": ["-DMG_ENABLE_TF_DUAL_NET"],
     "//conditions:default": [],
+}) + select({
+    ":enable_lite": ["-DMG_ENABLE_LITE_DUAL_NET"],
+    "//conditions:default": [],
 })
 
 factory_engine_deps = select({
@@ -53,6 +56,9 @@ factory_engine_deps = select({
     "//conditions:default": [],
 }) + select({
     ":enable_tf": [":tf_dual_net"],
+    "//conditions:default": [],
+}) + select({
+    ":enable_lite": [":lite_dual_net"],
     "//conditions:default": [],
 })
 
@@ -108,6 +114,20 @@ minigo_cc_library(
         "//cc:base",
         "//cc:check",
         "//cc:tensorflow",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+minigo_cc_library(
+    name = "lite_dual_net",
+    srcs = ["lite_dual_net.cc"],
+    hdrs = ["lite_dual_net.h"],
+    deps = [
+        ":dual_net",
+        "//cc:base",
+        "//cc:check",
+        "//cc:tf_lite",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
     ],
