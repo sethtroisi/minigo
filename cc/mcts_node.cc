@@ -72,7 +72,11 @@ std::string MctsNode::Describe() const {
     child_N_sum += e.N;
   }
   for (int rank = 0; rank < 15; ++rank) {
+    // TODO only print while > 1 child_N
     Coord i = std::get<2>(sort_order[rank]);
+    if (child_N(i) == 0) {
+        break;
+    }
     float soft_N = child_N(i) / child_N_sum;
     float p_delta = soft_N - child_P(i);
     float p_rel = p_delta / child_P(i);
@@ -96,9 +100,13 @@ std::vector<Coord> MctsNode::MostVisitedPath() const {
   std::vector<Coord> path;
   const auto* node = this;
   while (!node->children.empty()) {
-    int next_kid = ArgMax(
-        node->edges,
-        [](const EdgeStats& a, const EdgeStats& b) { return a.N < b.N; });
+    auto child_action_score = CalculateChildActionScore();
+    using SortInfo = std::tuple<float, float, int>;
+    std::array<SortInfo, kNumMoves> sort_order;
+    for (int i = 0; i < kNumMoves; ++i) {
+      sort_order[i] = SortInfo(child_N(i), child_action_score[i], i);
+    }
+    int next_kid = ArgMax(child_action_score, std::greater<SortInfo>());
     path.push_back(next_kid);
     auto it = node->children.find(next_kid);
     if (it == node->children.end()) {

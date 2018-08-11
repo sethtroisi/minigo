@@ -133,24 +133,24 @@ class MCTSNode(object):
         return self.Q * self.position.to_play
 
     def select_leaf(self):
-        current = self
+        node = self
         pass_move = go.N * go.N
         while True:
-            current.N += 1
+            node.N += 1
             # if a node has never been evaluated, we have no basis to select a child.
-            if not current.is_expanded:
+            if not node.is_expanded:
                 break
             # HACK: if last move was a pass, always investigate double-pass first
             # to avoid situations where we auto-lose by passing too early.
-            if (current.position.recent
-                and current.position.recent[-1].move is None
-                    and current.child_N[pass_move] == 0):
-                current = current.maybe_add_child(pass_move)
+            if (node.position.recent
+                and node.position.recent[-1].move is None
+                    and node.child_N[pass_move] == 0):
+                cnode= node.maybe_add_child(pass_move)
                 continue
 
-            best_move = np.argmax(current.child_action_score)
-            current = current.maybe_add_child(best_move)
-        return current
+            best_move = np.argmax(node.child_action_score)
+            node = node.maybe_add_child(best_move)
+        return node
 
     def maybe_add_child(self, fcoord):
         """ Adds child node for fcoord if it doesn't already exist, and returns it. """
@@ -266,11 +266,15 @@ class MCTSNode(object):
             probs = probs ** .98
         return probs / np.sum(probs)
 
+    def _top_child(self):
+        return np.argmax(self.child_N + self.child_action_score / 1000)
+
     def most_visited_path_nodes(self):
         node = self
         output = []
         while node.children:
-            next_kid = np.argmax(node.child_N)
+            # tie break the same way as describe
+            next_kid = node._top_child()
             node = node.children.get(next_kid)
             if node is None:
                 break
@@ -311,9 +315,12 @@ class MCTSNode(object):
         output.append(self.most_visited_path())
         output.append(
             "move : action    Q     U     P   P-Dir    N  soft-N  p-delta  p-rel")
+
+
+        # I THINK IT's USING SOFT PICK!!!! BECAUSE MAYBE PICKING NOT TOP N?
         for key in sort_order[:15]:
-            if self.child_N[key] == 0:
-                break
+            #if self.child_N[key] == 0:
+            #    break
             output.append("\n{!s:4} : {: .3f} {: .3f} {:.3f} {:.3f} {:.3f} {:5d} {:.4f} {: .5f} {: .2f}".format(
                 coords.to_kgs(coords.from_flat(key)),
                 self.child_action_score[key],

@@ -282,6 +282,7 @@ class MiniguiCmdHandler(BasicCmdHandler):
 
         root = self._player.get_root()
         dbg("")
+        # Describe the root AFTER move has been played.
         dbg(root.describe())
         if result != "resign":
             dbg("")
