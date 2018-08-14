@@ -315,7 +315,7 @@ class MCTSNode(object):
         output.append(
             "move : action    Q     U     P   P-Dir    N  soft-N  p-delta  p-rel")
         for rank, key in enumerate(sort_order[:15]):
-            if rank > 0 and self.child_N[key] == 0:
+            if rank > 1 and self.child_N[key] == 0:
                 break
             output.append("\n{!s:4} : {: .3f} {: .3f} {:.3f} {:.3f} {:.3f} {:5d} {:.4f} {: .5f} {: .2f}".format(
                 coords.to_kgs(coords.from_flat(key)),
