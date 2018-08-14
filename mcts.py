@@ -103,7 +103,7 @@ class MCTSNode(object):
 
     @property
     def child_U(self):
-        return (FLAGS.c_puct * math.sqrt(1 + self.N) *
+        return (FLAGS.c_puct * math.sqrt(self.N) *
                 self.child_prior / (1 + self.child_N))
 
     @property
@@ -312,11 +312,11 @@ class MCTSNode(object):
         output.append("{q:.4f}\n".format(q=self.Q))
         output.append(self.most_visited_path())
         output.append(
-            "move : action    Q     U     P   P-Dir    N  soft-N  p-delta  p-rel")
+            "move :  action  Q      U      P     P-Dir    N  soft-N  p-delta  p-rel")
         for rank, key in enumerate(sort_order[:15]):
             if rank > 1 and self.child_N[key] == 0:
                 break
-            output.append("\n{!s:4} : {: .3f} {: .3f} {:.3f} {:.3f} {:.3f} {:5d} {:.4f} {: .5f} {: .2f}".format(
+            output.append("\n{!s:4} : {: .4f} {: .4f} {:.4f} {:.3f} {:.3f} {:5d} {:.4f} {: .5f} {: .2f}".format(
                 coords.to_kgs(coords.from_flat(key)),
                 self.child_action_score[key],
                 self.child_Q[key],

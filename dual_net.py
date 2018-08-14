@@ -165,9 +165,9 @@ class DualNetwork():
         #if use_random_symmetry:
         #    probabilities = symmetries.invert_symmetries_pi(
         #        syms_used, probabilities)
-        print ("run", value)
+        print ("run {:.6f}\t{:.7f}".format((value[0] + 1) / 2, value[0]))
         for i, p in enumerate(probabilities[0]):
-            print("{:6.0f} ".format(100000 * p), end="")
+            print("{:4.0f} ".format(10000 * p), end="")
             if i % 19 == 18:
                 print()
         print ()

@@ -130,7 +130,7 @@ class MCTSPlayer(MCTSPlayerInterface):
         else:
             current_readouts = self.root.N
             while self.root.N < current_readouts + self.num_readouts:
-                print("Hi suggest_move:", self.root.N)
+                print("N's:", self.root.N, sum(self.root.child_N))
                 print(self.root.describe())
                 print()
                 self.tree_search()
