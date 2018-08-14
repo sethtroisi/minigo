@@ -275,8 +275,7 @@ class MCTSNode(object):
         while node.children:
             next_kid = node._top_child()
             node = node.children.get(next_kid)
-            if node is None:
-                break
+            assert node is not None
             output.append(node)
         return output
 

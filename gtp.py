@@ -21,7 +21,7 @@ from absl import app, flags
 
 from dual_net import DualNetwork
 from gtp_cmd_handlers import (
-    BasicCmdHandler, KgsCmdHandler, GoGuiCmdHandler, MiniguiCmdHandler, RegressionsCmdHandler)
+    BasicCmdHandler, KgsCmdHandler, GoGuiCmdHandler, MiniguiBasicCmdHandler, RegressionsCmdHandler)
 import gtp_engine
 from strategies import MCTSPlayer, CGOSPlayer
 from utils import dbg
@@ -65,7 +65,7 @@ def make_gtp_instance(load_file, cgos_mode=False, kgs_mode=False,
     engine.add_cmd_handler(RegressionsCmdHandler(player))
     engine.add_cmd_handler(GoGuiCmdHandler(player))
     if minigui_mode:
-        engine.add_cmd_handler(MiniguiCmdHandler(player, courtesy_pass=kgs_mode))
+        engine.add_cmd_handler(MiniguiBasicCmdHandler(player, courtesy_pass=kgs_mode))
     else:
         engine.add_cmd_handler(BasicCmdHandler(player, courtesy_pass=kgs_mode))
 
