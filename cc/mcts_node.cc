@@ -80,7 +80,7 @@ std::string MctsNode::Describe() const {
     // clang-format off
     oss << "\n" << std::left << setw(5) << i.ToKgs() << std::right
         << ": " << setw(6) << setprecision(3) << child_action_score[i]
-        << " " << setw(6) << child_Q(i)
+        << " " << setw(6) << _child_Q(i)
         << " " << setw(5) << child_U(i)
         << " " << setw(5) << child_P(i)
         << " " << setw(5) << child_original_P(i)
@@ -276,7 +276,7 @@ std::array<float, kNumMoves> MctsNode::CalculateChildActionScore() const {
 
   std::array<float, kNumMoves> result;
   for (int i = 0; i < kNumMoves; ++i) {
-    float Q = child_Q(i);
+    float Q = _child_Q(i);
     float U = U_scale * child_P(i) / (1 + child_N(i));
     result[i] = Q * to_play + U - 1000.0f * illegal_moves[i];
   }

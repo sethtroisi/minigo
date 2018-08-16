@@ -223,10 +223,10 @@ TEST(MctsPlayerTest, DontPassIfLosing) {
   auto best_move = ArgMax(root->edges, MctsNode::CmpN);
   ASSERT_EQ(Coord::FromKgs("D9"), best_move);
   // D9 should have a positive value.
-  EXPECT_LT(0, root->child_Q(best_move));
+  EXPECT_LT(0, root->_child_Q(best_move));
   EXPECT_LE(20, root->N());
   // Passing should be ineffective.
-  EXPECT_GT(0, root->child_Q(Coord::kPass));
+  EXPECT_GT(0, root->_child_Q(Coord::kPass));
 
   // No virtual losses should be pending.
   EXPECT_EQ(0, CountPendingVirtualLosses(root));
@@ -248,10 +248,10 @@ TEST(MctsPlayerTest, ParallelTreeSearch) {
   auto best_move = ArgMax(root->edges, MctsNode::CmpN);
   EXPECT_EQ(Coord::FromString("D9"), best_move);
   // D9 should have a positive value.
-  EXPECT_LT(0, root->child_Q(best_move));
+  EXPECT_LT(0, root->_child_Q(best_move));
   EXPECT_LE(20, root->N());
   // Passing should be ineffective.
-  EXPECT_GT(0, root->child_Q(Coord::kPass));
+  EXPECT_GT(0, root->_child_Q(Coord::kPass));
 
   // No virtual losses should be pending.
   EXPECT_EQ(0, CountPendingVirtualLosses(root));

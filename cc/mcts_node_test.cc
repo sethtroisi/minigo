@@ -104,7 +104,6 @@ TEST(MctsNodeTest, BackupIncorporateResults) {
   EXPECT_EQ(1, leaf->N());
   // And that leaf's value had its parent's Q (0) as a prior, so the Q
   // should now be the average of 0, -1
-  EXPECT_FLOAT_EQ(-0.5, root.child_Q(leaf->move));
   EXPECT_FLOAT_EQ(-0.5, leaf->Q());
 
   // We're assuming that SelectLeaf() returns a leaf like:
@@ -126,11 +125,9 @@ TEST(MctsNodeTest, BackupIncorporateResults) {
   EXPECT_EQ(2, leaf->N());
   EXPECT_EQ(1, leaf2->N());
   // average of 0, -1, -0.2
-  EXPECT_FLOAT_EQ(root.child_Q(leaf->move), leaf->Q());
   EXPECT_FLOAT_EQ(-0.4, leaf->Q());
 
   // average of 0, -0.2
-  EXPECT_FLOAT_EQ(-0.1, leaf->child_Q(leaf2->move));
   EXPECT_FLOAT_EQ(-0.1, leaf2->Q());
 }
 
@@ -162,8 +159,8 @@ TEST(MctsNodeTest, ChildUUpdatesFromParentQ) {
   EXPECT_FLOAT_EQ(leaf1->Q(), 0);
   EXPECT_FLOAT_EQ(leaf2->Q(), 0);
   // Leaf1 and leaf2 have already incremented N from select_leaf.
-  EXPECT_FLOAT_EQ(root.child_Q(leaf1->move), root.Q()/2);
-  EXPECT_FLOAT_EQ(root.child_Q(leaf2->move), root.Q()/2);
+  EXPECT_FLOAT_EQ(root._child_Q(leaf1->move), root.Q()/2);
+  EXPECT_FLOAT_EQ(root._child_Q(leaf2->move), root.Q()/2);
 
   leaf1->IncorporateResults(probs, -1, &root);  // white wins!
 
@@ -174,8 +171,8 @@ TEST(MctsNodeTest, ChildUUpdatesFromParentQ) {
   EXPECT_FLOAT_EQ(leaf2->Q(), 0);
 
   // Child_Q used for action score is updated for both children.
-  EXPECT_FLOAT_EQ(root.child_Q(leaf1->move), (root.Q() + leaf1->W())/2);
-  EXPECT_FLOAT_EQ(root.child_Q(leaf2->move), root.Q()/2);
+  EXPECT_FLOAT_EQ(root._child_Q(leaf1->move), (root.Q() + leaf1->W())/2);
+  EXPECT_FLOAT_EQ(root._child_Q(leaf2->move), root.Q()/2);
 }
 
 TEST(MctsNodeTest, DoNotExplorePastFinish) {

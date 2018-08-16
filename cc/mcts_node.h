@@ -62,7 +62,9 @@ class MctsNode {
   float child_W(int i) const { return edges[i].W; }
   float child_P(int i) const { return edges[i].P; }
   float child_original_P(int i) const { return edges[i].original_P; }
-  float child_Q(int i) const {
+
+  // Use only for child_action_score, includes parent Q.
+  float _child_Q(int i) const {
     // Child Q is the weighted average of parent_Q and Q's explored beneath it.
     // This works better than init-to-0 or init-to-static-parent-q because
     // it updates explore/exploit as the parent Q evolves, this is espectially

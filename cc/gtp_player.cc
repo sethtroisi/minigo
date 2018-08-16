@@ -534,7 +534,7 @@ void GtpPlayer::ReportSearchStatus(const MctsNode* last_read) {
   std::cerr << "mg-q:";
   for (int i = 0; i < kNumMoves; ++i) {
     std::cerr << " " << std::fixed << std::setprecision(3)
-              << (root()->child_Q(i) - root()->Q());
+              << (root()->_child_Q(i) - root()->Q());
   }
   std::cerr << "\n";
 

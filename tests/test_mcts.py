@@ -101,7 +101,6 @@ class TestMctsNodes(test_utils.MiniGoUnitTest):
         self.assertEqual(1, leaf.N)
         # And that leaf's value had its parent's Q (0) as a prior, so the Q
         # should now be the average of 0, -1
-        self.assertAlmostEqual(-0.5, root.child_Q[leaf.fmove])
         self.assertAlmostEqual(-0.5, leaf.Q)
 
         # We're assuming that select_leaf() returns a leaf like:
@@ -121,10 +120,8 @@ class TestMctsNodes(test_utils.MiniGoUnitTest):
         self.assertEqual(2, leaf.N)
         self.assertEqual(1, leaf2.N)
         # average of 0, -1, -0.2
-        self.assertAlmostEqual(root.child_Q[leaf.fmove], leaf.Q)
         self.assertAlmostEqual(-0.4, leaf.Q)
         # average of 0, -0.2
-        self.assertAlmostEqual(-0.1, leaf.child_Q[leaf2.fmove])
         self.assertAlmostEqual(-0.1, leaf2.Q)
 
 
