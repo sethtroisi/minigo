@@ -20,6 +20,13 @@
 #endif  // MG_DEFAULT_ENGINE
 #endif  // MG_ENABLE_TF_DUAL_NET
 
+#ifdef MG_ENABLE_LITE_DUAL_NET
+#include "cc/dual_net/lite_dual_net.h"
+#ifndef MG_DEFAULT_ENGINE
+#define MG_DEFAULT_ENGINE "lite"
+#endif  // MG_DEFAULT_ENGINE
+#endif  // MG_ENABLE_LITE_DUAL_NET
+
 DEFINE_string(engine, MG_DEFAULT_ENGINE,
               "The inference engine to use. Accepted values:"
 #ifdef MG_ENABLE_REMOTE_DUAL_NET
@@ -27,6 +34,9 @@ DEFINE_string(engine, MG_DEFAULT_ENGINE,
 #endif
 #ifdef MG_ENABLE_TF_DUAL_NET
               " \"tf\""
+#endif
+#ifdef MG_ENABLE_LITE_DUAL_NET
+              " \"lite\""
 #endif
 );
 
@@ -42,9 +52,6 @@ DEFINE_string(tpu_name, "", "Cloud TPU name, e.g. grpc://10.240.2.2:8470.");
 DEFINE_int32(conv_width, 256, "Width of the model's convolution filters.");
 DEFINE_int32(parallel_tpus, 8,
              "If model=remote, the number of TPU cores to run on in parallel.");
-DEFINE_int32(
-    games_per_inference, 16,
-    "Number of games to merge together into a single inference batch.");
 DEFINE_int32(port, 50051, "The port opened by the InferenceService server.");
 DECLARE_int32(virtual_losses);
 
@@ -55,7 +62,7 @@ namespace {
 #ifdef MG_ENABLE_REMOTE_DUAL_NET
 class RemoteDualNetFactory : public DualNetFactory {
  public:
-  explicit RemoteDualNetFactory(std::string model_path)
+  explicit RemoteDualNetFactory(std::string model_path, int parallel_games)
       : DualNetFactory(std::move(model_path)) {
     inference_worker_thread_ = std::thread([this]() {
       std::vector<std::string> cmd_parts = {
@@ -81,8 +88,9 @@ class RemoteDualNetFactory : public DualNetFactory {
       fputc('\n', stderr);
     });
 
+    int games_per_inference = std::max(1, parallel_games / 2);
     server_ = absl::make_unique<InferenceServer>(
-        FLAGS_virtual_losses, FLAGS_games_per_inference, FLAGS_port);
+        FLAGS_virtual_losses, games_per_inference, FLAGS_port);
   }
 
   ~RemoteDualNetFactory() override {
@@ -110,14 +118,28 @@ class TfDualNetFactory : public DualNetFactory {
 };
 #endif  // MG_ENABLE_TF_DUAL_NET
 
+#ifdef MG_ENABLE_LITE_DUAL_NET
+class LiteDualNetFactory : public DualNetFactory {
+ public:
+  LiteDualNetFactory(std::string model_path)
+      : DualNetFactory(std::move(model_path)) {}
+
+  std::unique_ptr<DualNet> New() override {
+    return absl::make_unique<LiteDualNet>(model());
+  }
+};
+#endif  // MG_ENABLE_LITE_DUAL_NET
+
 }  // namespace
 
 DualNetFactory::~DualNetFactory() = default;
 
-std::unique_ptr<DualNetFactory> NewDualNetFactory(std::string model_path) {
+std::unique_ptr<DualNetFactory> NewDualNetFactory(std::string model_path,
+                                                  int parallel_games) {
   if (FLAGS_engine == "remote") {
 #ifdef MG_ENABLE_REMOTE_DUAL_NET
-    return absl::make_unique<RemoteDualNetFactory>(std::move(model_path));
+    return absl::make_unique<RemoteDualNetFactory>(std::move(model_path),
+                                                   parallel_games);
 #else
     MG_FATAL() << "Binary wasn't compiled with remote inference support";
 #endif  // MG_ENABLE_REMOTE_DUAL_NET
@@ -129,6 +151,14 @@ std::unique_ptr<DualNetFactory> NewDualNetFactory(std::string model_path) {
 #else
     MG_FATAL() << "Binary wasn't compiled with tf inference support";
 #endif  // MG_ENABLE_TF_DUAL_NET
+  }
+
+  if (FLAGS_engine == "lite") {
+#ifdef MG_ENABLE_LITE_DUAL_NET
+    return absl::make_unique<LiteDualNetFactory>(std::move(model_path));
+#else
+    MG_FATAL() << "Binary wasn't compiled with lite inference support";
+#endif  // MG_ENABLE_LITE_DUAL_NET
   }
 
   MG_FATAL() << "Unrecognized inference engine \"" << FLAGS_engine << "\"";

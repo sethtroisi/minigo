@@ -14,7 +14,6 @@
 
 import os
 import random
-import sys
 import time
 
 from absl import flags
@@ -24,11 +23,12 @@ import coords
 import go
 import mcts
 import sgf_wrapper
-
+from utils import dbg
 from player_interface import MCTSPlayerInterface
 
+
 flags.DEFINE_integer('softpick_move_cutoff', (go.N * go.N // 12) // 2 * 2,
-                     'The move number (<=) up to which moves are softpicked from MCTS visits.')
+                     'The move number (<) up to which moves are softpicked from MCTS visits.')
 # Ensure that both white and black have an equal number of softpicked moves.
 flags.register_validator('softpick_move_cutoff', lambda x: x % 2 == 0)
 
@@ -48,7 +48,7 @@ flags.DEFINE_integer('parallel_readouts', 8,
 FLAGS = flags.FLAGS
 
 
-def time_recommendation(move_num, seconds_per_move=5, time_limit=15*60,
+def time_recommendation(move_num, seconds_per_move=5, time_limit=15 * 60,
                         decay_factor=0.98):
     '''Given the current move number and the 'desired' seconds per move, return
     how much time should actually be used. This is intended specifically for
@@ -90,11 +90,9 @@ class MCTSPlayer(MCTSPlayerInterface):
             self.temp_threshold = -1
         else:
             self.temp_threshold = FLAGS.softpick_move_cutoff
-        self.comments = []
-        self.searches_pi = []
+
+        self.initialize_game()
         self.root = None
-        self.result = 0
-        self.result_string = None
         self.resign_threshold = resign_threshold or FLAGS.resign_threshold
         self.timed_match = timed_match
         assert (self.timed_match and self.seconds_per_move >
@@ -134,15 +132,15 @@ class MCTSPlayer(MCTSPlayerInterface):
             while self.root.N < current_readouts + self.num_readouts:
                 self.tree_search()
             if self.verbosity > 0:
-                print("%d: Searched %d times in %s seconds\n\n" % (
-                    position.n, self.num_readouts, time.time() - start), file=sys.stderr)
+                dbg("%d: Searched %d times in %.2f seconds\n\n" % (
+                    position.n, self.num_readouts, time.time() - start))
 
-        # print some stats on anything with probability > 1%
+        # print some stats on moves considered.
         if self.verbosity > 2:
-            print(self.root.describe(), file=sys.stderr)
-            print('\n\n', file=sys.stderr)
+            dbg(self.root.describe())
+            dbg('\n\n')
         if self.verbosity > 3:
-            print(self.root.position, file=sys.stderr)
+            dbg(self.root.position)
 
         return self.pick_move()
 
@@ -155,8 +153,8 @@ class MCTSPlayer(MCTSPlayerInterface):
             `inject_noise` calls.
         '''
         if not self.two_player_mode:
-            self.searches_pi.append(
-                self.root.children_as_pi(self.root.position.n <= self.temp_threshold))
+            self.searches_pi.append(self.root.children_as_pi(
+                self.root.position.n < self.temp_threshold))
         self.comments.append(self.root.describe())
         try:
             self.root = self.root.maybe_add_child(coords.to_flat(c))
@@ -178,7 +176,7 @@ class MCTSPlayer(MCTSPlayerInterface):
         if self.root.position.n >= self.temp_threshold:
             fcoord = np.argmax(self.root.child_N)
         else:
-            cdf = self.root.child_N.cumsum()
+            cdf = self.root.children_as_pi(squash=True).cumsum()
             cdf /= cdf[-2]  # Prevents passing via softpick.
             selection = random.random()
             fcoord = cdf.searchsorted(selection)
@@ -216,8 +214,10 @@ class MCTSPlayer(MCTSPlayerInterface):
         if len(pos.recent) == 0:
             return
 
-        def fmt(move): return "{}-{}".format('b' if move.color == 1 else 'w',
-                                             coords.to_kgs(move.move))
+        def fmt(move):
+            return "{}-{}".format('b' if move.color == go.BLACK else 'w',
+                                  coords.to_kgs(move.move))
+
         path = " ".join(fmt(move) for move in pos.recent[-diff:])
         if node.position.n >= FLAGS.max_game_length:
             path += " (depth cutoff reached) %0.1f" % node.position.score()

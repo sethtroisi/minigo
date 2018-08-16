@@ -6,7 +6,6 @@ import itertools
 import multiprocessing as mp
 import os
 import random
-import re
 import subprocess
 import time
 from collections import deque
@@ -26,6 +25,7 @@ READ_OPTS = preprocessing.TF_RECORD_CONFIG
 LOCAL_DIR = "data/"
 
 MINIMUM_NEW_GAMES = 12000
+AVG_GAMES_PER_MODEL = 20000
 
 
 def pick_examples_from_tfrecord(filename, samples_per_game=4):
@@ -75,7 +75,7 @@ class ExampleBuffer():
         with mp.Pool(threads) as pool:
             res = tqdm(pool.imap(self.func, games), total=len(games))
             self.examples.extend(itertools.chain.from_iterable(res))
-        print("Got", len(self.examples))
+        print("Got", len(self.examples), "examples")
 
     def update(self, new_games):
         """ new_games is a list of .tfrecord.zz new game records. """
@@ -93,7 +93,7 @@ class ExampleBuffer():
                 self.total_updates += num_new_games
             self.examples.extend(self.func(game))
         if first_new_game is None:
-            print ("No new games", file_timestamp(new_games[-1]), self.examples[-1][0])
+            print("No new games", file_timestamp(new_games[-1]), self.examples[-1][0])
 
     def flush(self, path):
         # random.shuffle on deque is O(n^2) convert to list for O(n)
@@ -121,6 +121,7 @@ class ExampleBuffer():
 def files_for_model(model):
     return tf.gfile.Glob(os.path.join(LOCAL_DIR, model[1], '*.zz'))
 
+
 def smart_rsync(
         from_model_num=0,
         source_dir=None,
@@ -131,6 +132,7 @@ def smart_rsync(
     for _, model in models:
         _rsync_dir(os.path.join(
             source_dir, model), os.path.join(dest_dir, model))
+
 
 def time_rsync(from_date,
                source_dir=None,
@@ -168,7 +170,8 @@ def _determine_chunk_to_make(write_dir):
     chunk_to_make = os.path.join(write_dir, str(
         models[-1][0] + 2) + '.tfrecord.zz')
     while tf.gfile.Exists(chunk_to_make):
-        print("Chunk for next model ({}) already exists.  Sleeping.".format(chunk_to_make))
+        print("Chunk for next model ({}) already exists. Sleeping.".format(
+            chunk_to_make))
         time.sleep(5 * 60)
         models = fsdb.get_models()
         chunk_to_make = os.path.join(write_dir, str(
@@ -177,10 +180,20 @@ def _determine_chunk_to_make(write_dir):
 
     return chunk_to_make, False
 
+
+def get_window_size(chunk_num):
+    """ Adjust the window size by how far we are through a run.
+    At the start of the run, there's a benefit to 'expiring' the completely
+    random games a little sooner, and scaling up to the 500k game window
+    specified in the paper.
+    """
+    return min(500000, (chunk_num + 5) * (AVG_GAMES_PER_MODEL // 2))
+
+
 def fill_and_wait_time(bufsize=dual_net.EXAMPLES_PER_GENERATION,
-                  write_dir=None,
-                  threads=32,
-                  start_from=None):
+                       write_dir=None,
+                       threads=32,
+                       start_from=None):
     start_from = start_from or dt.datetime.utcnow()
     write_dir = write_dir or fsdb.golden_chunk_dir()
     buf = ExampleBuffer(bufsize)
@@ -193,9 +206,8 @@ def fill_and_wait_time(bufsize=dual_net.EXAMPLES_PER_GENERATION,
 
     hours = fsdb.get_hour_dirs()
     files = (tf.gfile.Glob(os.path.join(LOCAL_DIR, d, "*.zz"))
-                 for d in reversed(hours)
-             if tf.gfile.Exists(os.path.join(LOCAL_DIR, d)))
-    files = itertools.islice(files, 500000) 
+             for d in reversed(hours) if tf.gfile.Exists(os.path.join(LOCAL_DIR, d)))
+    files = itertools.islice(files, get_window_size(chunk_to_make))
 
     models = fsdb.get_models()
     buf.parallel_fill(list(itertools.chain.from_iterable(files)), threads=threads)
@@ -207,24 +219,25 @@ def fill_and_wait_time(bufsize=dual_net.EXAMPLES_PER_GENERATION,
         start_from = dt.datetime.utcnow()
         hours = sorted(fsdb.get_hour_dirs(LOCAL_DIR))
         new_files = list(map(lambda d: tf.gfile.Glob(
-                os.path.join(LOCAL_DIR, d, '*.zz')), hours[-2:]))
+            os.path.join(LOCAL_DIR, d, '*.zz')), hours[-2:]))
         buf.update(list(itertools.chain.from_iterable(new_files)))
         if fast_write:
             break
         time.sleep(30)
         if fsdb.get_latest_model() != models[-1]:
-            print ("New model!  Waiting for games. Got", buf.total_updates, "new games so far")
+            print("New model!  Waiting for games. Got", buf.total_updates, "new games so far")
 
     latest = fsdb.get_latest_model()
     print("New model!", latest[1], "!=", models[-1][1])
     print(buf)
     buf.flush(chunk_to_make)
 
+
 def fill_and_wait_models(bufsize=dual_net.EXAMPLES_PER_GENERATION,
-                  write_dir=None,
-                  threads=8,
-                  model_window=100,
-                  skip_first_rsync=False):
+                         write_dir=None,
+                         threads=8,
+                         model_window=100,
+                         skip_first_rsync=False):
     """ Fills a ringbuffer with positions from the most recent games, then
     continually rsync's and updates the buffer until a new model is promoted.
     Once it detects a new model, iit then dumps its contents for training to
@@ -232,7 +245,6 @@ def fill_and_wait_models(bufsize=dual_net.EXAMPLES_PER_GENERATION,
     """
     write_dir = write_dir or fsdb.golden_chunk_dir()
     buf = ExampleBuffer(bufsize)
-    chunk_to_make = _determine_chunk_to_make(write_dir)
     models = fsdb.get_models()[-model_window:]
     if not skip_first_rsync:
         with timer("Rsync"):

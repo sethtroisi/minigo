@@ -12,7 +12,6 @@ import functools
 import json
 import logging
 import subprocess
-from threading import Lock
 
 parser = argparse.ArgumentParser()
 
@@ -72,11 +71,12 @@ python_binary = args.python_for_engine
 
 if args.engine == "py":
     GTP_COMMAND = [python_binary,  "-u",  # turn off buffering
-                   "main.py", "gtp",
+                   "gtp.py",
                    "--load-file", args.model,
+                   "--minigui_mode=true",
                    "--num_readouts", "1000",
                    "--conv_width", "128",
-                   "-v", "2"]
+                   "--verbose", "2"]
 elif args.engine == "cc":
     GTP_COMMAND = [
         "bazel-bin/cc/main",
@@ -150,4 +150,4 @@ def index():
 
 
 if __name__ == "__main__":
-  socketio.run(app, port=args.port, host=args.host)
+    socketio.run(app, port=args.port, host=args.host)

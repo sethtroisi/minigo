@@ -20,16 +20,13 @@ overfit to a near-zero loss.
 """
 
 import os
-import sys
 import tempfile
 
 from absl import flags
-import preprocessing
 import dual_net
-import go
 import main
+import selfplay
 import example_buffer as eb
-from tensorflow import gfile
 import subprocess
 
 
@@ -51,46 +48,52 @@ def rl_loop():
     flags.FLAGS.num_readouts = 10
 
     with tempfile.TemporaryDirectory() as base_dir:
+        bootstrap_model = '000000-bootstrap'
+
         flags.FLAGS.base_dir = base_dir
         working_dir = os.path.join(base_dir, 'models_in_training')
         flags.FLAGS.model_dir = working_dir
-        model_save_path = os.path.join(base_dir, 'models', '000000-bootstrap')
+        model_save_path = os.path.join(base_dir, 'models', bootstrap_model)
         local_eb_dir = os.path.join(base_dir, 'scratch')
         next_model_save_file = os.path.join(
             base_dir, 'models', '000001-nextmodel')
         selfplay_dir = os.path.join(base_dir, 'data', 'selfplay')
-        model_selfplay_dir = os.path.join(selfplay_dir, '000000-bootstrap')
+        model_selfplay_dir = os.path.join(selfplay_dir, bootstrap_model)
         gather_dir = os.path.join(base_dir, 'data', 'training_chunks')
         holdout_dir = os.path.join(
-            base_dir, 'data', 'holdout', '000000-bootstrap')
-        sgf_dir = os.path.join(base_dir, 'sgf', '000000-bootstrap')
+            base_dir, 'data', 'holdout', bootstrap_model)
+        sgf_dir = os.path.join(base_dir, 'sgf', bootstrap_model)
         os.makedirs(os.path.join(base_dir, 'data'), exist_ok=True)
+        os.makedirs(os.path.join(base_dir, bootstrap_model), exist_ok=True)
 
         print("Creating random initial weights...")
         main.bootstrap(working_dir, model_save_path)
         print("Playing some games...")
         # Do two selfplay runs to test gather functionality
-        main.selfplay(
-            load_file=model_save_path,
-            output_dir=model_selfplay_dir,
-            output_sgf=sgf_dir,
-            holdout_pct=0)
-        main.selfplay(
-            load_file=model_save_path,
-            output_dir=model_selfplay_dir,
-            output_sgf=sgf_dir,
-            holdout_pct=0)
-        # Do one holdout run to test validation
-        main.selfplay(
+        selfplay.run_game(
             load_file=model_save_path,
             holdout_dir=holdout_dir,
-            output_dir=model_selfplay_dir,
-            output_sgf=sgf_dir,
+            selfplay_dir=model_selfplay_dir,
+            sgf_dir=sgf_dir,
+            holdout_pct=0)
+        selfplay.run_game(
+            load_file=model_save_path,
+            holdout_dir=holdout_dir,
+            selfplay_dir=model_selfplay_dir,
+            sgf_dir=sgf_dir,
+            holdout_pct=0)
+        # Do one holdout run to test validation
+        selfplay.run_game(
+            load_file=model_save_path,
+            holdout_dir=holdout_dir,
+            selfplay_dir=model_selfplay_dir,
+            sgf_dir=sgf_dir,
             holdout_pct=100)
 
-        print("See sgf files here?")
+        print("SGFs here:")
         sgf_listing = subprocess.check_output(["ls", "-l", sgf_dir + "/full"])
         print(sgf_listing.decode("utf-8"))
+        assert len(os.listdir(os.path.join(sgf_dir, "full")))
 
         print("Gathering game output...")
         eb.make_chunk_for(output_dir=gather_dir,
@@ -107,11 +110,13 @@ def rl_loop():
         print("Trying validate on 'holdout' game...")
         main.validate(holdout_dir)
         print("Verifying that new checkpoint is playable...")
-        main.selfplay(
+        selfplay.run_game(
             load_file=next_model_save_file,
             holdout_dir=holdout_dir,
-            output_dir=model_selfplay_dir,
-            output_sgf=sgf_dir)
+            selfplay_dir=model_selfplay_dir,
+            sgf_dir=sgf_dir,
+            holdout_pct=0)
+
 
 if __name__ == '__main__':
     # horrible horrible hack to pass flag validation.
