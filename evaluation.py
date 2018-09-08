@@ -45,8 +45,11 @@ def play_match(black_net, white_net, games, sgf_dir, verbosity):
     for i in range(games):
         num_move = 0  # The move number of the current game
 
-        black.initialize_game()
-        white.initialize_game()
+        for player in [black, white]:
+            player.initialize_game()
+            first_node = player.root.select_leaf()
+            prob, val = player.network.run(first_node.position)
+            first_node.incorporate_results(prob, val, first_node)
 
         while True:
             start = time.time()
