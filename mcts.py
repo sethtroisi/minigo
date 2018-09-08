@@ -132,23 +132,23 @@ class MCTSNode(object):
         return self.Q * self.position.to_play
 
     def select_leaf(self):
-        current = self
+        node = self
         pass_move = go.N * go.N
         while True:
             # if a node has never been evaluated, we have no basis to select a child.
-            if not current.is_expanded:
+            if not node.is_expanded:
                 break
             # HACK: if last move was a pass, always investigate double-pass first
             # to avoid situations where we auto-lose by passing too early.
-            if (current.position.recent and
-                current.position.recent[-1].move is None and
-                    current.child_N[pass_move] == 0):
-                current = current.maybe_add_child(pass_move)
+            if (node.position.recent and
+                node.position.recent[-1].move is None and
+                    node.child_N[pass_move] == 0):
+                cnode= node.maybe_add_child(pass_move)
                 continue
 
-            best_move = np.argmax(current.child_action_score)
-            current = current.maybe_add_child(best_move)
-        return current
+            best_move = np.argmax(node.child_action_score)
+            node = node.maybe_add_child(best_move)
+        return node
 
     def maybe_add_child(self, fcoord):
         """ Adds child node for fcoord if it doesn't already exist, and returns it. """
@@ -255,11 +255,15 @@ class MCTSNode(object):
             return probs
         return probs / np.sum(probs)
 
+    def _top_child(self):
+        # Sort by child_N tie break with action score.
+        return np.argmax(self.child_N + self.child_action_score / 10000)
+
     def most_visited_path_nodes(self):
         node = self
         output = []
         while node.children:
-            next_kid = np.argmax(node.child_N)
+            next_kid = node._top_child()
             node = node.children.get(next_kid)
             assert node is not None
             output.append(node)
@@ -298,11 +302,11 @@ class MCTSNode(object):
         output.append("{q:.4f}\n".format(q=self.Q))
         output.append(self.most_visited_path())
         output.append(
-            "move : action    Q     U     P   P-Dir    N  soft-N  p-delta  p-rel")
-        for key in sort_order[:15]:
-            if self.child_N[key] == 0:
+            "move :  action  Q      U      P     P-Dir    N  soft-N  p-delta  p-rel")
+        for rank, key in enumerate(sort_order[:15]):
+            if rank > 1 and self.child_N[key] == 0:
                 break
-            output.append("\n{!s:4} : {: .3f} {: .3f} {:.3f} {:.3f} {:.3f} {:5d} {:.4f} {: .5f} {: .2f}".format(
+            output.append("\n{!s:4} : {: .4f} {: .4f} {:.4f} {:.3f} {:.3f} {:5d} {:.4f} {: .5f} {: .2f}".format(
                 coords.to_kgs(coords.from_flat(key)),
                 self.child_action_score[key],
                 self.child_Q[key],

@@ -136,6 +136,9 @@ class MCTSPlayer(MCTSPlayerInterface):
                 current_readouts += 1
 
             while self.root.N < current_readouts + self.num_readouts:
+                print("N's:", self.root.N, sum(self.root.child_N))
+                print(self.root.describe())
+                print()
                 self.tree_search()
             if self.verbosity > 0:
                 dbg("%d: Searched %d times in %.2f seconds\n\n" % (
@@ -180,7 +183,8 @@ class MCTSPlayer(MCTSPlayerInterface):
         Highest N is most robust indicator. In the early stage of the game, pick
         a move weighted by visit count; later on, pick the absolute max.'''
         if self.root.position.n >= self.temp_threshold:
-            fcoord = np.argmax(self.root.child_N)
+            # Sort by child_N tie break with action score.
+            fcoord = self.root._top_child()
         else:
             cdf = self.root.children_as_pi(squash=True).cumsum()
             cdf /= cdf[-2]  # Prevents passing via softpick.

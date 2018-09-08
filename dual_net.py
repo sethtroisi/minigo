@@ -176,6 +176,14 @@ class DualNetwork():
         #if use_random_symmetry:
         #    probabilities = symmetries.invert_symmetries_pi(
         #        syms_used, probabilities)
+        print ("run {:.6f}\t{:.7f}".format((value[0] + 1) / 2, value[0]))
+        for i, p in enumerate(probabilities[0]):
+            print("{:4.0f} ".format(10000 * p), end="")
+            if i % 19 == 18:
+                print()
+        print ()
+        print ("sum:", sum(probabilities[0]))
+        print ()
         return probabilities, value
 
 
@@ -368,7 +376,7 @@ def model_inference_fn(features, training):
         kernel_size=3,
         padding="same",
         data_format="channels_last",
-        use_bias=False) # Toggled to true for local_5_64_test True)
+        use_bias=True) # Toggled to true for local_5_64_test True)
 
     def my_res_layer(inputs):
         int_layer1 = my_batchn(my_conv2d(inputs))
