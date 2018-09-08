@@ -13,17 +13,13 @@
 # limitations under the License.
 
 from datetime import datetime
-import sys
 import itertools
 import json
 import time
 import sgf_wrapper
 import go
 import coords
-
-
-def dbg(fmt, *args):
-    print(fmt % args, file=sys.stderr, flush=True)
+from utils import dbg
 
 
 def translate_gtp_color(gtp_color):
@@ -58,7 +54,7 @@ class BasicCmdHandler(object):
             except NotImplementedError:
                 pass
             except:
-                print("Error saving sgf", file=sys.stderr, flush=True)
+                dbg("Error saving sgf")
         self._player.initialize_game(go.Position(komi=self._komi))
 
     def cmd_komi(self, komi: float):
@@ -101,7 +97,7 @@ class BasicCmdHandler(object):
         raise NotImplementedError()
 
     def cmd_showboard(self):
-        print('\n\n' + str(self._player.get_position()) + '\n\n', file=sys.stderr)
+        dbg('\n\n' + str(self._player.get_position()) + '\n\n')
         return True
 
     def cmd_final_score(self):
@@ -163,7 +159,7 @@ class RegressionsCmdHandler(object):
         # want to advance the engine along with us rather than try to
         # push in some finished Position object.
         for idx, p in enumerate(sgf_wrapper.replay_sgf(contents)):
-            print("playing #", idx, p.next_move, file=sys.stderr)
+            dbg("playing #", idx, p.next_move)
             self._player.play_move(p.next_move)
             if movenum and idx == movenum:
                 break
@@ -201,9 +197,8 @@ class GoGuiCmdHandler(object):
             colors = "bw" if root.position.to_play is go.BLACK else "wb"
             moves_cols = " ".join(['{} {}'.format(*z)
                                    for z in zip(itertools.cycle(colors), moves)])
-            print("gogui-gfx: TEXT", "{:.3f} after {}".format(
-                root.Q, root.N), file=sys.stderr, flush=True)
-            print("gogui-gfx: VAR", moves_cols, file=sys.stderr, flush=True)
+            dbg("gogui-gfx: TEXT", "{:.3f} after {}".format(root.Q, root.N))
+            dbg("gogui-gfx: VAR", moves_cols)
         return self.cmd_nextplay()
 
     def _heatmap(self, sort_order, node, prop):
@@ -213,7 +208,7 @@ class GoGuiCmdHandler(object):
             for key in sort_order if node.child_N[key] > 0][: 20])
 
 
-class MiniguiCmdHandler(BasicCmdHandler):
+class MiniguiBasicCmdHandler(BasicCmdHandler):
     def __init__(self, player, courtesy_pass=False):
         super().__init__(player, courtesy_pass)
 
@@ -273,7 +268,7 @@ class MiniguiCmdHandler(BasicCmdHandler):
             msg["q"] = root.parent.Q
         else:
             msg["q"] = 0
-        dbg("mg-gamestate:%s", json.dumps(msg, sort_keys=True))
+        dbg("mg-gamestate:%s" % json.dumps(msg, sort_keys=True))
 
     def cmd_genmove(self, color=None):
         start = time.time()
@@ -281,15 +276,12 @@ class MiniguiCmdHandler(BasicCmdHandler):
         duration = time.time() - start
 
         root = self._player.get_root()
-        dbg("")
-        dbg(root.describe())
         if result != "resign":
             dbg("")
             dbg(root.position.__str__(colors=False))
-            dbg("%d readouts, %.3f s/100. (%.2f sec)",
+            dbg("%d readouts, %.3f s/100. (%.2f sec)" % (
                 self._player.get_num_readouts(),
-                duration / self._player.get_num_readouts() * 100.0,
-                duration)
+                duration / self._player.get_num_readouts() * 100.0, duration))
             dbg("")
             if root.is_done():
                 self._player.set_result(
@@ -325,15 +317,15 @@ class MiniguiCmdHandler(BasicCmdHandler):
                 path.append(leaf.fmove)
                 leaf = leaf.parent
             path = [coords.to_kgs(coords.from_flat(m)) for m in reversed(path)]
-            dbg("mg-search:%s", " ".join(path))
+            dbg("mg-search:%s" % " ".join(path))
 
         q = root.child_Q - root.Q
         q = ['%.3f' % x for x in q]
-        dbg("mg-q:%s", " ".join(q))
+        dbg("mg-q:%s" % " ".join(q))
 
         n = ['%d' % x for x in root.child_N]
-        dbg("mg-n:%s", " ".join(n))
+        dbg("mg-n:%s" % " ".join(n))
 
         nodes = root.most_visited_path_nodes()
         path = [coords.to_kgs(coords.from_flat(m.fmove)) for m in nodes]
-        dbg("mg-pv:%s", " ".join(path))
+        dbg("mg-pv:%s" % " ".join(path))

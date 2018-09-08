@@ -19,7 +19,6 @@ This worker is used to set up many parallel selfplay instances.'''
 import random
 import os
 import socket
-import sys
 import time
 
 from absl import app, flags
@@ -64,8 +63,7 @@ def play(network, verbosity=0):
 
     player.initialize_game()
 
-    # Must run this once at the start, so that noise injection actually
-    # affects the first move of the game.
+    # Must run this once at the start to expand the root node.
     first_node = player.root.select_leaf()
     prob, val = network.run(first_node.position)
     first_node.incorporate_results(prob, val, first_node)
@@ -102,9 +100,8 @@ def play(network, verbosity=0):
                   coords.to_kgs(coords.from_flat(player.root.fmove)))
 
     if verbosity >= 2:
-        print("%s: %.3f" % (player.result_string, player.root.Q), file=sys.stderr)
-        print(player.root.position,
-              player.root.position.score(), file=sys.stderr)
+        utils.dbg("%s: %.3f" % (player.result_string, player.root.Q))
+        utils.dbg(player.root.position, player.root.position.score())
 
     return player
 

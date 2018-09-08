@@ -23,6 +23,7 @@
 #include <utility>
 
 #include "cc/algorithm.h"
+#include "cc/check.h"
 
 namespace minigo {
 
@@ -46,6 +47,45 @@ MctsNode::MctsNode(MctsNode* parent, Coord move)
   for (int i = 0; i < kNumMoves; ++i) {
     illegal_moves[i] = !position.IsMoveLegal(i);
   }
+}
+
+Coord MctsNode::GetMostVisitedMove() const {
+  // Find the set of moves with the largest N.
+  inline_vector<Coord, kNumMoves> moves;
+  moves.push_back(0);
+  int best_N = child_N(0);
+  for (int i = 1; i < kNumMoves; ++i) {
+    int cn = child_N(i);
+    if (cn > best_N) {
+      moves.clear();
+      moves.push_back(i);
+      best_N = cn;
+    } else if (cn == best_N) {
+      moves.push_back(i);
+    }
+  }
+
+  // If there's only one move with the largest N, we're done.
+  if (moves.size() == 1) {
+    return moves[0];
+  }
+
+  // Otherwise, break score using the child action score.
+  float to_play = position.to_play() == Color::kBlack ? 1 : -1;
+  float U_scale = kPuct * std::sqrt(1.0f + N());
+
+  Coord c = moves[0];
+  float best_cas =
+      CalculateSingleMoveChildActionScore(to_play, U_scale, moves[0]);
+  for (int i = 0; i < moves.size(); ++i) {
+    float cas = CalculateSingleMoveChildActionScore(to_play, U_scale, moves[i]);
+    if (cas > best_cas) {
+      best_cas = cas;
+      c = moves[i];
+    }
+  }
+
+  return c;
 }
 
 std::string MctsNode::Describe() const {
@@ -96,14 +136,10 @@ std::vector<Coord> MctsNode::MostVisitedPath() const {
   std::vector<Coord> path;
   const auto* node = this;
   while (!node->children.empty()) {
-    int next_kid = ArgMax(
-        node->edges,
-        [](const EdgeStats& a, const EdgeStats& b) { return a.N < b.N; });
+    Coord next_kid = node->GetMostVisitedMove();
     path.push_back(next_kid);
     auto it = node->children.find(next_kid);
-    if (it == node->children.end()) {
-      break;
-    }
+    MG_CHECK(it != node->children.end());
     node = it->second.get();
   }
   return path;
@@ -114,13 +150,10 @@ std::string MctsNode::MostVisitedPathString() const {
   const auto* node = this;
   for (Coord c : MostVisitedPath()) {
     auto it = node->children.find(c);
-    if (it == node->children.end()) {
-      oss << "GAME END";
-      break;
-    }
+    MG_CHECK(it != node->children.end());
+    node = it->second.get();
     oss << node->move.ToKgs() << " (" << static_cast<int>(node->N())
         << ") ==> ";
-    node = it->second.get();
   }
   oss << std::fixed << std::setprecision(5) << "Q: " << node->Q();
   return oss.str();
@@ -164,8 +197,6 @@ void MctsNode::InjectNoise(const std::array<float, kNumMoves>& noise) {
 MctsNode* MctsNode::SelectLeaf() {
   auto* node = this;
   for (;;) {
-    ++node->stats->N;
-
     // If a node has never been evaluated, we have no basis to select a child.
     if (!node->is_expanded) {
       return node;
@@ -192,9 +223,8 @@ void MctsNode::IncorporateResults(absl::Span<const float> move_probabilities,
   assert(!position.is_game_over());
 
   // If the node has already been selected for the next inference batch, we
-  // shouldn't select it again.
+  // shouldn't 'expand' it again.
   if (is_expanded) {
-    RevertVisits(up_to);
     return;
   }
 
@@ -236,21 +266,11 @@ void MctsNode::IncorporateEndGameResult(float value, MctsNode* up_to) {
   BackupValue(value, up_to);
 }
 
-void MctsNode::RevertVisits(MctsNode* up_to) {
-  auto* node = this;
-  for (;;) {
-    node->stats->N -= 1;
-    if (node == up_to) {
-      return;
-    }
-    node = node->parent;
-  }
-}
-
 void MctsNode::BackupValue(float value, MctsNode* up_to) {
   auto* node = this;
   for (;;) {
     node->stats->W += value;
+    ++node->stats->N;
     if (node == up_to) {
       return;
     }
@@ -285,13 +305,11 @@ void MctsNode::PruneChildren(Coord c) {
 
 std::array<float, kNumMoves> MctsNode::CalculateChildActionScore() const {
   float to_play = position.to_play() == Color::kBlack ? 1 : -1;
-  float U_scale = kPuct * std::sqrt(1.0f + N());
+  float U_scale = kPuct * std::sqrt(std::max<float>(1, N() - 1));
 
   std::array<float, kNumMoves> result;
   for (int i = 0; i < kNumMoves; ++i) {
-    float Q = child_Q(i);
-    float U = U_scale * child_P(i) / (1 + child_N(i));
-    result[i] = Q * to_play + U - 1000.0f * illegal_moves[i];
+    result[i] = CalculateSingleMoveChildActionScore(to_play, U_scale, i);
   }
   return result;
 }

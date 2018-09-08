@@ -38,12 +38,14 @@ def loop(working_dir='estimator_working_dir', tpu_name=None):
         '--tpu_name', tpu_name
     ]
     while True:
-        print("==================================")
+        print("=" * 40)
         with timer("Train"):
             train = subprocess.call(['python', 'rl_loop.py', 'train'] + flags)
             if train != 0:
                 print("Skipping validation")
+                print("!!!")
                 print("=== Training failed at ", dt.datetime.utcnow())
+                print("!!!")
                 sys.exit(1)
                 continue
 

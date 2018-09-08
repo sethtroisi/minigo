@@ -37,8 +37,8 @@
 #include "cc/check.h"
 #include "cc/constants.h"
 #include "cc/dual_net/factory.h"
-#include "cc/file/filesystem.h"
 #include "cc/file/path.h"
+#include "cc/file/utils.h"
 #include "cc/gtp_player.h"
 #include "cc/init.h"
 #include "cc/mcts_player.h"
@@ -110,11 +110,7 @@ DEFINE_string(model, "",
 DEFINE_string(model_two, "",
               "When running 'eval' mode, provide a path to a second minigo "
               "model, also serialized as a GraphDef proto.");
-DEFINE_int32(parallel_games, 32,
-             "Number of games to play in parallel. For performance reasons, "
-             "parallel_games should equal games_per_inference * 2 because this "
-             "allows the transfer of inference requests & responses to be "
-             "overlapped with model evaluation.");
+DEFINE_int32(parallel_games, 32, "Number of games to play in parallel.");
 
 // Output flags.
 DEFINE_string(output_dir, "",
@@ -151,27 +147,6 @@ std::string GetOutputName(absl::Time now, size_t i) {
 std::string GetOutputDir(absl::Time now, const std::string& root_dir) {
   auto sub_dirs = absl::FormatTime("%Y-%m-%d-%H", now, absl::UTCTimeZone());
   return file::JoinPath(root_dir, sub_dirs);
-}
-
-void WriteExample(const std::string& output_dir, const std::string& output_name,
-                  const MctsPlayer& player) {
-  MG_CHECK(file::RecursivelyCreateDir(output_dir));
-
-  // Write the TensorFlow examples.
-  std::vector<tensorflow::Example> examples;
-  examples.reserve(player.history().size());
-  DualNet::BoardFeatures features;
-  std::vector<const Position::Stones*> recent_positions;
-  for (const auto& h : player.history()) {
-    h.node->GetMoveHistory(DualNet::kMoveHistory, &recent_positions);
-    DualNet::SetFeatures(recent_positions, h.node->position.to_play(),
-                         &features);
-    examples.push_back(
-        tf_utils::MakeTfExample(features, h.search_pi, player.result()));
-  }
-
-  auto output_path = file::JoinPath(output_dir, output_name + ".tfrecord.zz");
-  tf_utils::WriteTfExamples(output_path, examples);
 }
 
 void WriteSgf(const std::string& output_dir, const std::string& output_name,
@@ -217,7 +192,7 @@ void WriteSgf(const std::string& output_dir, const std::string& output_name,
   auto sgf_str = sgf::CreateSgfString(moves, options);
 
   auto output_path = file::JoinPath(output_dir, output_name + ".sgf");
-  TF_CHECK_OK(tf_utils::WriteFile(output_path, sgf_str));
+  MG_CHECK(file::WriteFile(output_path, sgf_str));
 }
 
 void WriteSgf(const std::string& output_dir, const std::string& output_name,
@@ -260,7 +235,7 @@ class SelfPlayer {
   // held. This allows us to safely update the command line arguments from a
   // flag file without causing any race conditions.
   struct GameOptions {
-    void Init(int thread_id) {
+    void Init(int thread_id, Random* rnd) {
       ParseMctsPlayerOptionsFromFlags(&player_options);
       player_options.verbose = thread_id == 0;
       // If an random seed was explicitly specified, make sure we use a
@@ -268,6 +243,7 @@ class SelfPlayer {
       if (player_options.random_seed != 0) {
         player_options.random_seed += 1299283 * thread_id;
       }
+      player_options.resign_enabled = (*rnd)() >= FLAGS_disable_resign_pct;
 
       run_forever = FLAGS_run_forever;
       holdout_pct = FLAGS_holdout_pct;
@@ -283,6 +259,53 @@ class SelfPlayer {
     std::string holdout_dir;
     std::string sgf_dir;
   };
+
+  void LogEndGameInfo(MctsPlayer* player, absl::Duration game_time) {
+    std::cout << player->result_string() << std::endl;
+    std::cout << "Playing game: " << absl::ToDoubleSeconds(game_time)
+              << std::endl;
+    std::cout << "Played moves: " << player->root()->position.n() << std::endl;
+
+    const auto& history = player->history();
+    if (history.empty()) {
+      return;
+    }
+
+    // Find the move at which the game looked the bleakest from the perspective
+    // of the winner.
+    float result = player->result();
+    float bleakest_eval = history[0].node->Q() * result;
+    float bleakest_move = 0;
+    for (size_t i = 1; i < history.size(); ++i) {
+      float eval = history[i].node->Q() * result;
+      if (eval < bleakest_eval) {
+        bleakest_eval = eval;
+        bleakest_move = i;
+      }
+    }
+    std::cout << "Bleakest eval: move=" << bleakest_move
+              << " Q=" << history[bleakest_move].node->Q() << std::endl;
+
+    // If resignation is disabled, check to see if the first time Q_perspective
+    // crossed the resign_threshold the eventual winner of the game would have
+    // resigned. Note that we only check for the first resignation: if the
+    // winner would have incorrectly resigned AFTER the loser would have
+    // resigned on an earlier move, this is not counted as a bad resignation for
+    // the winner (since the game would have ended after the loser's initial
+    // resignation).
+    if (!player->options().resign_enabled) {
+      for (size_t i = 0; i < history.size(); ++i) {
+        if (history[i].node->Q_perspective() <
+            player->options().resign_threshold) {
+          if ((history[i].node->Q() < 0) != (result < 0)) {
+            std::cout << "Bad resign: move=" << i
+                      << " Q=" << history[i].node->Q() << std::endl;
+          }
+          break;
+        }
+      }
+    }
+  }
 
   void ThreadRun(int thread_id) {
     // Only print the board using ANSI colors if stderr is sent to the
@@ -301,7 +324,7 @@ class SelfPlayer {
             << "Manually changing the model during selfplay is not supported. "
                "Use --checkpoint_dir and --engine=remote to perform inference "
                "using the most recent checkpoint from training.";
-        game_options.Init(thread_id);
+        game_options.Init(thread_id, &rnd_);
         player = absl::make_unique<MctsPlayer>(dual_net_factory_->New(),
                                                game_options.player_options);
       }
@@ -311,14 +334,22 @@ class SelfPlayer {
       while (!player->game_over()) {
         auto move = player->SuggestMove();
         if (player->options().verbose) {
+          const auto& position = player->root()->position;
           std::cerr << player->root()->position.ToPrettyString(use_ansi_colors);
+          std::cerr << "Move: " << position.n()
+                    << " Captures X: " << position.num_captures()[0]
+                    << " O: " << position.num_captures()[1] << std::endl;
           std::cerr << player->root()->Describe() << std::endl;
         }
         player->PlayMove(move);
       }
-      std::cerr << player->result_string() << std::endl;
-      std::cout << "Playing game: "
-                << absl::ToDoubleSeconds(absl::Now() - start_time) << std::endl;
+
+      {
+        // Log the end game info with the shared mutex held to prevent the
+        // outputs from multiple threads being interleaved.
+        absl::MutexLock lock(&mutex_);
+        LogEndGameInfo(player.get(), absl::Now() - start_time);
+      }
 
       // Write the outputs.
       auto now = absl::Now();
@@ -332,7 +363,8 @@ class SelfPlayer {
       auto example_dir =
           is_holdout ? game_options.holdout_dir : game_options.output_dir;
       if (!example_dir.empty()) {
-        WriteExample(GetOutputDir(now, example_dir), output_name, *player);
+        tf_utils::WriteGameExamples(GetOutputDir(now, example_dir), output_name,
+                                    *player);
       }
 
       if (!game_options.sgf_dir.empty()) {
@@ -353,16 +385,24 @@ class SelfPlayer {
       return;
     }
     uint64_t new_flags_timestamp;
-    TF_CHECK_OK(tf_utils::GetModTime(FLAGS_flags_path, &new_flags_timestamp));
+    MG_CHECK(file::GetModTime(FLAGS_flags_path, &new_flags_timestamp));
+    std::cerr << "flagfile:" << FLAGS_flags_path
+              << " old_ts:" << absl::FromUnixMicros(flags_timestamp_)
+              << " new_ts:" << absl::FromUnixMicros(new_flags_timestamp);
     if (new_flags_timestamp == flags_timestamp_) {
+      std::cerr << " skipping" << std::endl;
       return;
     }
 
     flags_timestamp_ = new_flags_timestamp;
     std::string contents;
-    TF_CHECK_OK(tf_utils::ReadFile(FLAGS_flags_path, &contents));
+    MG_CHECK(file::ReadFile(FLAGS_flags_path, &contents));
 
-    for (auto line : absl::StrSplit(contents, '\n')) {
+    std::vector<std::string> lines =
+        absl::StrSplit(contents, '\n', absl::SkipEmpty());
+    std::cerr << " loaded flags:" << absl::StrJoin(lines, " ") << std::endl;
+
+    for (absl::string_view line : lines) {
       std::pair<absl::string_view, absl::string_view> line_comment =
           absl::StrSplit(line, absl::MaxSplits('#', 1));
       line = absl::StripAsciiWhitespace(line_comment.first);
