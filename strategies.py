@@ -129,6 +129,12 @@ class MCTSPlayer(MCTSPlayerInterface):
                 self.tree_search()
         else:
             current_readouts = self.root.N
+            if self.root.N == 0:
+                # If root hasn't been expanded, do one extra readout so that
+                # sum of children >= num_readouts. This is generally only
+                # invoke at the root (or if last move was unexpected).
+                current_readouts += 1
+
             while self.root.N < current_readouts + self.num_readouts:
                 self.tree_search()
             if self.verbosity > 0:
