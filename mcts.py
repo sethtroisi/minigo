@@ -83,6 +83,7 @@ class MCTSNode(object):
         self.illegal_moves = 1 - self.position.all_legal_moves()
         self.child_N = np.zeros([go.N * go.N + 1], dtype=np.float32)
         self.child_W = np.zeros([go.N * go.N + 1], dtype=np.float32)
+        self.net_value = 0
         # save a copy of the original prior before it gets mutated by d-noise.
         self.original_prior = np.zeros([go.N * go.N + 1], dtype=np.float32)
         self.child_prior = np.zeros([go.N * go.N + 1], dtype=np.float32)
@@ -99,7 +100,11 @@ class MCTSNode(object):
 
     @property
     def child_Q(self):
-        return self.child_W / (1 + self.child_N)
+        # fiddle with child_w and child_n so that when Q = net_value when child_n == 0.
+        child_w = self.child_W + self.net_value * (self.child_N == 0)
+        child_n = self.child_N + (self.child_N == 0)
+
+        return child_w / child_n
 
     @property
     def child_U(self):
@@ -211,7 +216,8 @@ class MCTSNode(object):
         # continuing to explore the most favorable move. This is a waste of search.
         #
         # The value seeded here acts as a prior, and gets averaged into Q calculations.
-        self.child_W = np.ones([go.N * go.N + 1], dtype=np.float32) * value
+        #self.child_W = np.ones([go.N * go.N + 1], dtype=np.float32) * value
+        self.net_value = value
         self.backup_value(value, up_to=up_to)
 
     def backup_value(self, value, up_to):
@@ -256,8 +262,11 @@ class MCTSNode(object):
         return probs / np.sum(probs)
 
     def _top_child(self):
-        # Sort by child_N tie break with action score.
-        return np.argmax(self.child_N + self.child_action_score / 10000)
+        # Sort by child_N tie break with Q.
+        # NOTE: scale Q so that it's less than one, and better Q is higher.
+        tie_break = (2 + self.child_Q * self.position.to_play) / 4
+
+        return np.argmax(self.child_N + tie_break)
 
     def most_visited_path_nodes(self):
         node = self
@@ -290,8 +299,10 @@ class MCTSNode(object):
 
     def describe(self):
         sort_order = list(range(go.N * go.N + 1))
-        sort_order.sort(key=lambda i: (
-            self.child_N[i], self.child_action_score[i]), reverse=True)
+        sort_order.sort(
+            key=lambda i: (self.child_N[i],
+                           self.child_Q[i] * self.position.to_play),
+            reverse=True)
         soft_n = self.child_N / max(1, sum(self.child_N))
         prior = self.child_prior
         p_delta = soft_n - prior
@@ -302,11 +313,11 @@ class MCTSNode(object):
         output.append("{q:.4f}\n".format(q=self.Q))
         output.append(self.most_visited_path())
         output.append(
-            "move :  action  Q      U      P     P-Dir    N  soft-N  p-delta  p-rel")
+            "move :  action  Q      U      P      P-Dir    N  soft-N  p-delta  p-rel")
         for rank, key in enumerate(sort_order[:15]):
             if rank > 1 and self.child_N[key] == 0:
                 break
-            output.append("\n{!s:4} : {: .4f} {: .4f} {:.4f} {:.3f} {:.3f} {:5d} {:.4f} {: .5f} {: .2f}".format(
+            output.append("\n{!s:4} : {: .4f} {: .4f} {:.4f} {:.4f} {:.3f} {:5d} {:.4f} {: .5f} {: .2f}".format(
                 coords.to_kgs(coords.from_flat(key)),
                 self.child_action_score[key],
                 self.child_Q[key],
