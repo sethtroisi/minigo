@@ -116,6 +116,10 @@ flags.DEFINE_integer(
 flags.DEFINE_integer(
     'keep_checkpoint_max', default=5, help='Number of checkpoints to keep.')
 
+flags.DEFINE_bool(
+    'use_random_symmetry', True,
+    help='If true random symmetries be used when doing inference.')
+
 flags.register_multi_flags_validator(
     ['use_tpu', 'iterations_per_loop', 'summary_steps'],
     lambda flags: (not flags['use_tpu'] or
@@ -160,30 +164,21 @@ class DualNetwork():
         without redifining the entire graph."""
         tf.train.Saver().restore(self.sess, save_file)
 
-    def run(self, position): #, use_random_symmetry=True):
-        probs, values = self.run_many([position],
-                                      use_random_symmetry=False)
+    def run(self, position):
+        probs, values = self.run_many([position])
         return probs[0], values[0]
 
-    def run_many(self, positions): #, use_random_symmetry=True):
+    def run_many(self, positions):
         processed = list(map(features_lib.extract_features, positions))
-        #if use_random_symmetry:
-        #    syms_used, processed = symmetries.randomize_symmetries_feat(
-        #        processed)
+        if FLAGS.use_random_symmetry:
+            syms_used, processed = symmetries.randomize_symmetries_feat(
+                processed)
         outputs = self.sess.run(self.inference_output,
                                 feed_dict={self.inference_input: processed})
         probabilities, value = outputs['policy_output'], outputs['value_output']
-        #if use_random_symmetry:
-        #    probabilities = symmetries.invert_symmetries_pi(
-        #        syms_used, probabilities)
-        #print ("run {:.6f}\t{:.7f}".format((value[0] + 1) / 2, value[0]))
-        #for i, p in enumerate(probabilities[0]):
-        #    print("{:4.0f} ".format(10000 * p), end="")
-        #    if i % 19 == 18:
-        #        print()
-        #print ()
-        #print ("sum:", sum(probabilities[0]))
-        #print ()
+        if FLAGS.use_random_symmetry:
+            probabilities = symmetries.invert_symmetries_pi(
+                syms_used, probabilities)
         return probabilities, value
 
 
