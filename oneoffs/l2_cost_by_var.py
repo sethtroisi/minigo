@@ -1,7 +1,8 @@
 """Plot the l2 cost of various tensors over a training run.
 
 Example usage:
-  python3 oneoffs/l2_cost_by_var.py --base_dir "gs://minigo-pub/v7-19x19/"
+  mkdir -p data/l2_cost
+  BOARD_SIZE=19 python3 oneoffs/l2_cost_by_var.py --base_dir "gs://minigo-pub/v7-19x19/"
 """
 import sys
 sys.path.insert(0, '.')
@@ -90,7 +91,7 @@ def save_plots(data_dir, df):
             plt.plot(df['model'].astype('int64'), df[column])
             plt.xlabel('Model idx')
             plt.ylabel('l2_cost')
-            plt.title('{} l2_cost over v7 run'.format(column))
+            plt.title('{} l2_cost over run'.format(column))
 
             file_name = '{}.png'.format(column.replace('/', '-'))
             plot_path = os.path.join(data_dir, file_name)
@@ -107,7 +108,7 @@ def main(unusedargv):
     # List vars constructed when using dual_net.
     dual_net_list(model_paths[0])
 
-    # Calculate l2 cost over a sequence of our models.
+    # Calculate l2 cost over a sequence of models.
     df = get_l2_cost_data(model_paths, FLAGS.idx_start, FLAGS.eval_every)
     print(df)
     save_plots(FLAGS.plot_dir, df)
