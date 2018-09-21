@@ -201,7 +201,7 @@ def model_fn(features, labels, mode, params=None):
         logits: [BATCH_SIZE, go.N * go.N + 1]
     '''
 
-    policy_output, value_output, logits = model_inference_fn(
+    policy_output, value_output, logits, shared = model_inference_fn(
         features, mode == tf.estimator.ModeKeys.TRAIN)
 
     # train ops
@@ -383,7 +383,7 @@ def model_inference_fn(features, training):
         tf.reshape(tf.layers.dense(value_fc_hidden, 1), [-1]),
         name='value_output')
 
-    return policy_output, value_output, logits
+    return policy_output, value_output, logits, shared_output
 
 
 def get_estimator(working_dir):
