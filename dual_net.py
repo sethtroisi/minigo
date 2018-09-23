@@ -383,7 +383,8 @@ def model_inference_fn(features, training):
         tf.reshape(tf.layers.dense(value_fc_hidden, 1), [-1]),
         name='value_output')
 
-    return policy_output, value_output, logits, value_fc_hidden
+    return policy_output, value_output, logits, value_conv
+    #return policy_output, value_output, logits, policy_conv
 
 
 def get_estimator(working_dir):
