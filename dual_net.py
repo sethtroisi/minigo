@@ -139,8 +139,8 @@ FLAGS = flags.FLAGS
 # Per AGZ, 2048 minibatch * 1k = 2M positions/generation
 EXAMPLES_PER_GENERATION = 2 ** 21
 
-def load_graph_def(f):
-    with open(f, "rb") as f:
+def load_graph_def(model):
+    with tf.gfile.GFile(model, 'rb') as f:
         graph_def = graph_pb2.GraphDef()
         graph_def.ParseFromString(f.read())
     return graph_def
@@ -177,7 +177,7 @@ class DualNetwork():
         graph_def = load_graph_def(self.save_file)
 
         if self.save_file.endswith('.trt.pb'):
-            # NOTE: when using a TensorRT graph parallel-readouts must
+            # NOTE: when using a TensorRT graph parallel-readouts should
             # match the hardcoded batch_size.
             import tensorflow.contrib.tensorrt as trt
 
@@ -194,7 +194,6 @@ class DualNetwork():
 
             self.inference_output = {name: op.outputs[0]
                 for name, op in zip(outputs, returns)}
-
 
     def initialize_weights(self, save_file):
         """Initialize the weights from the given save_file.
@@ -213,7 +212,6 @@ class DualNetwork():
         if FLAGS.use_random_symmetry:
             syms_used, processed = symmetries.randomize_symmetries_feat(
                 processed)
-
         outputs = self.sess.run(self.inference_output,
                                 feed_dict={self.inference_input: processed})
         probabilities, value = outputs['policy_output'], outputs['value_output']
