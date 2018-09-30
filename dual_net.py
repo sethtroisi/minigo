@@ -28,10 +28,11 @@ from tqdm import tqdm
 import numpy as np
 import tensorflow as tf
 from tensorflow.contrib import summary
-from tensorflow.python.training.summary_io import SummaryWriterCache
+from tensorflow.core.framework import graph_pb2
 from tensorflow.contrib.tpu.python.tpu import tpu_config
 from tensorflow.contrib.tpu.python.tpu import tpu_estimator
 from tensorflow.contrib.tpu.python.tpu import tpu_optimizer
+from tensorflow.python.training.summary_io import SummaryWriterCache
 
 import features as features_lib
 import go
@@ -138,6 +139,12 @@ FLAGS = flags.FLAGS
 # Per AGZ, 2048 minibatch * 1k = 2M positions/generation
 EXAMPLES_PER_GENERATION = 2 ** 21
 
+def load_graph_def(f):
+    with open(f, "rb") as f:
+        graph_def = graph_pb2.GraphDef()
+        graph_def.ParseFromString(f.read())
+    return graph_def
+
 
 class DualNetwork():
     def __init__(self, save_file):
@@ -147,7 +154,11 @@ class DualNetwork():
         config = tf.ConfigProto()
         config.gpu_options.allow_growth = True
         self.sess = tf.Session(graph=tf.Graph(), config=config)
-        self.initialize_graph()
+
+        if save_file.endswith('.pb'):
+            self.load_frozen_graph()
+        else:
+            self.initialize_graph()
 
     def initialize_graph(self):
         with self.sess.graph.as_default():
@@ -160,6 +171,30 @@ class DualNetwork():
                 self.initialize_weights(self.save_file)
             else:
                 self.sess.run(tf.global_variables_initializer())
+
+    def load_frozen_graph(self):
+        # Can either be a frozen graph or a frozen tensorrt graph.
+        graph_def = load_graph_def(self.save_file)
+
+        if self.save_file.endswith('.trt.pb'):
+            # NOTE: when using a TensorRT graph parallel-readouts must
+            # match the hardcoded batch_size.
+            import tensorflow.contrib.tensorrt as trt
+
+        outputs = ['value_output', 'policy_output']
+        with self.sess.graph.as_default():
+            # TODO do I need to fix first dimension of features?
+            feature, labels = get_inference_input()
+            self.inference_input = feature
+
+            returns = tf.import_graph_def(
+                graph_def=graph_def,
+                input_map={'pos_tensor': feature},
+                return_elements=outputs)
+
+            self.inference_output = {name: op.outputs[0]
+                for name, op in zip(outputs, returns)}
+
 
     def initialize_weights(self, save_file):
         """Initialize the weights from the given save_file.
@@ -178,6 +213,7 @@ class DualNetwork():
         if FLAGS.use_random_symmetry:
             syms_used, processed = symmetries.randomize_symmetries_feat(
                 processed)
+
         outputs = self.sess.run(self.inference_output,
                                 feed_dict={self.inference_input: processed})
         probabilities, value = outputs['policy_output'], outputs['value_output']

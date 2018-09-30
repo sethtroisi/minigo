@@ -6,6 +6,11 @@ batch_size, time for 100
 4, 1.76
 8, 1.68
 
+frozen
+4, 0.92
+
+tensorrt
+4, 0.72
 
 #####
 
@@ -13,6 +18,9 @@ c++ gtp
 
 Milliseconds per 100 reads: 735ms over 800 readouts (batched: 8)
 
+
+
+#####
 
 
 tensorrt

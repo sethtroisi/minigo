@@ -139,9 +139,27 @@ def freeze_graph(load_file):
     """ Loads a network and serializes just the inference parts for use by e.g. the C++ binary """
     n = dual_net.DualNetwork(load_file)
     out_graph = tf.graph_util.convert_variables_to_constants(
-        n.sess, n.sess.graph.as_graph_def(), ["policy_output", "value_output"])
-    with gfile.GFile(os.path.join(load_file + '.pb'), 'wb') as f:
+        n.sess, n.sess.graph.as_graph_def(), ['policy_output', 'value_output'])
+    with gfile.GFile(load_file + '.pb', 'wb') as f:
         f.write(out_graph.SerializeToString())
+
+
+def freeze_tensorrt(load_file, precision_mode='FP32', batch_size=8):
+    assert load_file.endswith('.pb'), (
+        'freeze_tensorrt takes a pb file', load_file)
+
+    graph_def = dual_net.load_graph_def(load_file)
+
+    import tensorflow.contrib.tensorrt as trt
+    trt_graph = trt.create_inference_graph(
+        graph_def,
+        ['policy_output', 'value_output'],
+        max_batch_size=batch_size,
+        max_workspace_size_bytes=100 * 2 ** 20,
+        precision_mode=precision_mode)
+
+    with gfile.GFile(load_file.replace('.pb', '.trt.pb'), 'wb') as f:
+        f.write(trt_graph.SerializeToString())
 
 
 if __name__ == '__main__':
@@ -154,6 +172,7 @@ if __name__ == '__main__':
         'train': train,
         'train_dir': train_dir,
         'freeze_graph': freeze_graph,
+        'freeze_tensorrt': freeze_tensorrt,
         'evaluate': evaluate,
         'validate': validate,
         'convert': convert,
