@@ -1,0 +1,24 @@
+python gtp
+
+batch_size, time for 100
+1, 4.07
+2, 2.4
+4, 1.76
+8, 1.68
+
+
+#####
+
+c++ gtp
+
+Milliseconds per 100 reads: 735ms over 800 readouts (batched: 8)
+
+
+
+tensorrt
+
+batch_size, NPS, guess for 100
+1, 126, 0.79
+4, 165, 0.61
+12, 170, 0.58
+
