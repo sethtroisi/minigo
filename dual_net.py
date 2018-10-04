@@ -301,29 +301,29 @@ def model_fn(features, labels, mode, params=None):
         # That way, they get logged automatically during training
         summary_writer = summary.create_file_writer(FLAGS.model_dir)
         with summary_writer.as_default(), \
-                summary.always_record_summaries():
+                summary.record_summaries_every_n_global_steps(64):
             for metric_name, metric_op in metric_ops.items():
                 summary.scalar(metric_name, metric_op[1])
 
         # Reset metrics occasionally so that they are mean of recent batches.
-        reset_op = tf.variables_initializer(tf.local_variables("metrics"))
-        cond_reset_op = tf.cond(
-            tf.equal(tf.mod(tf.reduce_min(step),
-                            FLAGS.summary_steps), tf.to_int64(1)),
-            lambda: reset_op,
-            lambda: tf.no_op())
+        #reset_op = tf.variables_initializer(tf.local_variables("metrics"))
+        #cond_reset_op = tf.cond(
+        #    tf.equal(tf.mod(tf.reduce_min(step),
+        #                    FLAGS.summary_steps), tf.to_int64(1)),
+        #    lambda: reset_op,
+        #    lambda: tf.no_op())
 
-        return summary.all_summary_ops() + [cond_reset_op]
+        return summary.all_summary_ops() #+ [cond_reset_op]
 
     metric_args = [
         policy_output,
         value_output,
         labels['pi_tensor'],
-        tf.reshape(policy_cost, [1]),
-        tf.reshape(value_cost, [1]),
-        tf.reshape(l2_cost, [1]),
-        tf.reshape(combined_cost, [1]),
-        tf.reshape(global_step, [1]),
+        tf.reshape(policy_cost, [-1]),
+        tf.reshape(value_cost, [-1]),
+        tf.reshape(l2_cost, [-1]),
+        tf.reshape(combined_cost, [-1]),
+        tf.reshape(global_step, [-1]),
     ]
 
     predictions = {
@@ -341,7 +341,7 @@ def model_fn(features, labels, mode, params=None):
         predictions=predictions,
         loss=combined_cost,
         train_op=train_op,
-        eval_metrics=(eval_metrics_only_fn, metric_args),
+        #eval_metrics=(eval_metrics_only_fn, metric_args),
         host_call=(host_call_fn, metric_args)
     )
     if FLAGS.use_tpu:
@@ -441,7 +441,7 @@ def get_tpu_estimator(working_dir):
         evaluation_master=tpu_grpc_url,
         model_dir=working_dir,
         save_checkpoints_steps=max(1000, FLAGS.iterations_per_loop),
-        save_summary_steps=FLAGS.summary_steps,
+#        save_summary_steps=FLAGS.summary_steps,
         keep_checkpoint_max=FLAGS.keep_checkpoint_max,
         session_config=tf.ConfigProto(
             allow_soft_placement=True, log_device_placement=True),

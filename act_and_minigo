@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+source ~/.venv/minigo/bin/activate
+
+>&2 echo $*
+
+$*

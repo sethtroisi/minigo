@@ -1,0 +1,27 @@
+run() {
+  BOARD_SIZE=19 python dual_net.py train \
+    --use_tpu --tpu_name=$1 \
+    --model_dir=gs://sethtroisi-sandbox/models/bs_exp/bootstrap_$2/ \
+    --iterations_per_loop=128 --summary_steps=256 \
+    --steps=1024 \
+    gs://tensor-go-minigo-v10-19/data/golden_chunks/{200..201}.tfrecord.zz
+}
+
+test() {
+#  run sethtroisi1 00
+  run sethtroisi1 01
+  run sethtroisi1 02
+  run sethtroisi1 03
+  run sethtroisi1 04
+}
+
+test2() {
+  run sethtroisi2 05
+  run sethtroisi2 06
+  run sethtroisi2 07
+  run sethtroisi2 08
+  run sethtroisi2 09
+}
+
+echo "hi"
+test2

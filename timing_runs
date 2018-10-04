@@ -1,0 +1,33 @@
+WORK_DIR="gs://$USER-sandbox/model"
+DATA_DIR="gs://tensor-go-minigo-v9-19/data/golden_chunks"
+
+test_speed () {
+  BOARD_SIZE=19 python dual_net.py train --use_tpu --tpu_name=sethtroisi3 --model_dir=$WORK_DIR/speed_test/$1_$2_$3_$4 $DATA_DIR/250.tfrecord.zz --steps=$5 --iterations_per_loop=$3 --summary_steps=$4 --trunk_layers=$1 --conv_width=$2
+}
+
+#test_speed 10 64   128 128 2048
+#test_speed 10 64   128 256 2048
+#test_speed 10 64   128 512 2048
+#test_speed 10 64   256 256 2048
+#test_speed 10 64   256 512 2048
+#test_speed 10 64   512 512 2048
+#
+#test_speed 10 128  128 128 2048
+#test_speed 10 128  128 256 2048
+#test_speed 10 128  128 512 2048
+#test_speed 10 128  256 256 2048
+#test_speed 10 128  256 512 2048
+#test_speed 10 128  512 512 2048
+#
+#test_speed 20 128  128 128 2048
+#test_speed 20 128  128 256 2048
+#test_speed 20 128  128 512 2048
+#test_speed 20 128  256 256 2048
+#test_speed 20 128  256 512 2048
+#test_speed 20 128  512 512 2048
+
+test_speed 10 128  64 128 2048
+test_speed 10 128  32 128 2048
+test_speed 10 128  16 128 2048
+test_speed 10 128  8  128 2048
+

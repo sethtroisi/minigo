@@ -1,0 +1,33 @@
+WORK_DIR="gs://$USER-sandbox/model"
+DATA_DIR="gs://tensor-go-minigo-v9-19/data/golden_chunks"
+
+
+test () {
+  BOARD_SIZE=19 python dual_net.py train --use_tpu --tpu_name=sethtroisi --model_dir=$WORK_DIR/fumble_analysis/$1_$2_$3 $DATA_DIR/{250..259}.tfrecord.zz --steps=30720 --iterations_per_loop=128 --summary_steps=256 --trunk_layers=$1 --conv_width=$2 --game_result_fumble_prob=$3
+}
+
+#test 5 64 0
+#test 5 64 0.10
+#test 5 64 0.05
+#test 5 64 0.02
+#test 5 64 0.01
+
+#test 10 128 0
+#test 10 128 0.10
+#test 10 128 0.05
+#test 10 128 0.02
+#test 10 128 0.01
+
+test 5  128 0
+test 15 128 0
+test 20 128 0
+test 5  192 0
+test 10 192 0
+test 15 192 0
+test 20 192 0
+
+#test 20 256 0
+#test 20 256 0.10
+#test 20 256 0.05
+#test 20 256 0.02
+#test 20 256 0.01
