@@ -45,6 +45,10 @@ flags.DEFINE_integer('parallel_readouts', 8,
                      'Number of searches to execute in parallel. This is also the batch size'
                      'for neural network evaluation.')
 
+# this should be called "verbosity" but flag name conflicts with absl.logging.
+# Should fix this by overhauling this logging system with appropriate logging.info/debug.
+flags.DEFINE_integer('verbose', 1, 'How much debug info to print.')
+
 FLAGS = flags.FLAGS
 
 
@@ -79,12 +83,12 @@ def time_recommendation(move_num, seconds_per_move=5, time_limit=15 * 60,
 
 class MCTSPlayer(MCTSPlayerInterface):
     def __init__(self, network, seconds_per_move=5, num_readouts=0,
-                 resign_threshold=None, verbosity=0, two_player_mode=False,
+                 resign_threshold=None, two_player_mode=False,
                  timed_match=False):
         self.network = network
         self.seconds_per_move = seconds_per_move
         self.num_readouts = num_readouts or FLAGS.num_readouts
-        self.verbosity = verbosity
+        self.verbosity = FLAGS.verbose
         self.two_player_mode = two_player_mode
         if two_player_mode:
             self.temp_threshold = -1
@@ -163,7 +167,8 @@ class MCTSPlayer(MCTSPlayerInterface):
             if not self.two_player_mode:
                 self.searches_pi.pop()
             self.comments.pop()
-            return False
+            raise
+
         self.position = self.root.position  # for showboard
         del self.root.parent.children
         return True  # GTP requires positive result.
@@ -174,7 +179,7 @@ class MCTSPlayer(MCTSPlayerInterface):
         Highest N is most robust indicator. In the early stage of the game, pick
         a move weighted by visit count; later on, pick the absolute max.'''
         if self.root.position.n >= self.temp_threshold:
-            fcoord = np.argmax(self.root.child_N)
+            fcoord = self.root.best_child()
         else:
             cdf = self.root.children_as_pi(squash=True).cumsum()
             cdf /= cdf[-2]  # Prevents passing via softpick.
@@ -185,7 +190,7 @@ class MCTSPlayer(MCTSPlayerInterface):
 
     def tree_search(self, parallel_readouts=None):
         if parallel_readouts is None:
-            parallel_readouts = FLAGS.parallel_readouts
+            parallel_readouts = min(FLAGS.parallel_readouts, self.num_readouts)
         leaves = []
         failsafe = 0
         while len(leaves) < parallel_readouts and failsafe < parallel_readouts * 2:

@@ -16,13 +16,13 @@
 
 #include <algorithm>
 #include <cmath>
-#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <utility>
 
 #include "absl/memory/memory.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "absl/time/clock.h"
 #include "cc/check.h"
@@ -110,6 +110,7 @@ void MctsPlayer::NewGame() {
   game_root_ = MctsNode(&dummy_stats_, {&bv_, &gv_, Color::kBlack});
   root_ = &game_root_;
   game_over_ = false;
+  history_.clear();
 }
 
 Coord MctsPlayer::SuggestMove() {
@@ -140,12 +141,12 @@ Coord MctsPlayer::SuggestMove() {
                              options_.time_limit, options_.decay_factor);
     }
     while (absl::Now() - start < absl::Seconds(seconds_per_move)) {
-      TreeSearch(options_.batch_size);
+      TreeSearch();
     }
   } else {
     // Use a fixed number of reads.
     while (root_->N() < current_readouts + options_.num_readouts) {
-      TreeSearch(options_.batch_size);
+      TreeSearch();
     }
   }
   int num_readouts = root_->N() - current_readouts;
@@ -197,10 +198,11 @@ Coord MctsPlayer::PickMove() {
   return c;
 }
 
-absl::Span<MctsNode* const> MctsPlayer::TreeSearch(int batch_size) {
+absl::Span<MctsNode* const> MctsPlayer::TreeSearch() {
+  int batch_size = options_.batch_size;
   int max_iterations = batch_size * 2;
 
-  leaves_.clear();
+  leaves_.resize(0);
   for (int i = 0; i < max_iterations; ++i) {
     auto* leaf = root_->SelectLeaf();
     if (leaf == nullptr) {
@@ -262,8 +264,7 @@ void MctsPlayer::PlayMove(Coord c) {
   root_->parent->PruneChildren(c);
 
   if (options_.verbose) {
-    std::cerr << name() << " Q: " << std::setw(8) << std::setprecision(5)
-              << root_->Q() << "\n";
+    std::cerr << absl::StreamFormat("%s Q: %0.5f\n", name(), root_->Q());
     std::cerr << "Played >>" << c << std::endl;
   }
 
@@ -278,14 +279,7 @@ void MctsPlayer::PlayMove(Coord c) {
 }
 
 std::string MctsPlayer::FormatScore(float score) const {
-  std::ostringstream oss;
-  oss << std::fixed;
-  if (score > 0) {
-    oss << "B+" << std::setprecision(1) << score;
-  } else {
-    oss << "W+" << std::setprecision(1) << -score;
-  }
-  return oss.str();
+  return absl::StrFormat("%c+%.1f", score > 0 ? 'B' : 'W', std::abs(score));
 }
 
 void MctsPlayer::PushHistory(Coord c) {
@@ -335,7 +329,7 @@ void MctsPlayer::PushHistory(Coord c) {
 
 void MctsPlayer::ProcessLeaves(absl::Span<MctsNode*> leaves) {
   // Select symmetry operations to apply.
-  symmetries_used_.clear();
+  symmetries_used_.resize(0);
   if (options_.random_symmetry) {
     symmetries_used_.reserve(leaves.size());
     for (size_t i = 0; i < leaves.size(); ++i) {
@@ -358,9 +352,21 @@ void MctsPlayer::ProcessLeaves(absl::Span<MctsNode*> leaves) {
         symmetries_used_[i], raw_features.data(), features_[i].data());
   }
 
-  // Run inference.
+  std::vector<const DualNet::BoardFeatures*> feature_ptrs;
+  feature_ptrs.reserve(features_.size());
+  for (const auto& feature : features_) {
+    feature_ptrs.push_back(&feature);
+  }
+
   outputs_.resize(leaves.size());
-  network_->RunMany(features_, absl::MakeSpan(outputs_), &model_);
+  std::vector<DualNet::Output*> output_ptrs;
+  output_ptrs.reserve(outputs_.size());
+  for (auto& output : outputs_) {
+    output_ptrs.push_back(&output);
+  }
+
+  // Run inference.
+  network_->RunMany(std::move(feature_ptrs), std::move(output_ptrs), &model_);
 
   // Record some information about the inference.
   if (!model_.empty()) {
