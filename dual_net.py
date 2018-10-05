@@ -290,18 +290,18 @@ def model_fn(features, labels, mode, params=None):
         # Create summary ops so that they show up in SUMMARIES collection
         # That way, they get logged automatically during training
         summary_writer = summary.create_file_writer(FLAGS.work_dir)
+        step_guess = tf.reduce_min(step)
         with summary_writer.as_default(), \
-                summary.record_summaries_every_n_global_steps(64):
+                summary.record_summaries_every_n_global_steps(64, step_guess):
             for metric_name, metric_op in metric_ops.items():
-                summary.scalar(metric_name, metric_op[1])
+                summary.scalar(metric_name, metric_op[1], step=step_guess)
 
         # Reset metrics occasionally so that they are mean of recent batches.
-        #reset_op = tf.variables_initializer(tf.local_variables("metrics"))
-        #cond_reset_op = tf.cond(
-        #    tf.equal(tf.mod(tf.reduce_min(step),
-        #                    FLAGS.summary_steps), tf.to_int64(1)),
-        #    lambda: reset_op,
-        #    lambda: tf.no_op())
+        reset_op = tf.variables_initializer(tf.local_variables("metrics"))
+        cond_reset_op = tf.cond(
+            tf.equal(tf.mod(step_guess, FLAGS.summary_steps), tf.to_int64(1)),
+            lambda: reset_op,
+            lambda: tf.no_op())
 
         return summary.all_summary_ops() #+ [cond_reset_op]
 
