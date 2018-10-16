@@ -32,7 +32,6 @@ from tensorflow.core.framework import graph_pb2
 from tensorflow.contrib.tpu.python.tpu import tpu_config
 from tensorflow.contrib.tpu.python.tpu import tpu_estimator
 from tensorflow.contrib.tpu.python.tpu import tpu_optimizer
-from tensorflow.python.training.summary_io import SummaryWriterCache
 
 import features as features_lib
 import go
@@ -132,11 +131,10 @@ flags.register_multi_flags_validator(
 FLAGS = flags.FLAGS
 
 
-def load_graph_def(model):
+def _load_graph_def(model):
+    """Helper function to load a graph def from file"""
     with tf.gfile.GFile(model, 'rb') as f:
-        graph_def = graph_pb2.GraphDef()
-        graph_def.ParseFromString(f.read())
-    return graph_def
+        return graph_pb2.GraphDef().FromString(f.read())
 
 
 class DualNetwork():
@@ -167,16 +165,15 @@ class DualNetwork():
 
     def load_frozen_graph(self):
         # Can either be a frozen graph or a frozen tensorrt graph.
-        graph_def = load_graph_def(self.save_file)
+        graph_def = _load_graph_def(self.save_file)
 
         if self.save_file.endswith('.trt.pb'):
-            # NOTE: when using a TensorRT graph parallel-readouts should
-            # match the hardcoded batch_size.
+            # TODO(sethtroisi): Determine if TensorRT graph parallel-readouts
+            # must match (e.g. ==) or exceed (e.g. >=) batch_size.
             import tensorflow.contrib.tensorrt as trt
 
         outputs = ['value_output', 'policy_output']
         with self.sess.graph.as_default():
-            # TODO do I need to fix first dimension of features?
             feature, labels = get_inference_input()
             self.inference_input = feature
 
@@ -529,6 +526,7 @@ def export_model(model_path):
     # also export a .pb for C++ inference
     freeze_graph(model_path)
 
+
 def freeze_graph(model_path):
     n = DualNetwork(model_path)
     out_graph = tf.graph_util.convert_variables_to_constants(
@@ -536,11 +534,12 @@ def freeze_graph(model_path):
     with tf.gfile.GFile(model_path + '.pb', 'wb') as f:
         f.write(out_graph.SerializeToString())
 
+
 def freeze_tensorrt(load_file, precision_mode='FP32', batch_size=8):
     assert load_file.endswith('.pb'), (
         'freeze_tensorrt takes a pb file', load_file)
 
-    graph_def = dual_net.load_graph_def(load_file)
+    graph_def = _load_graph_def(load_file)
 
     import tensorflow.contrib.tensorrt as trt
     trt_graph = trt.create_inference_graph(
@@ -552,4 +551,3 @@ def freeze_tensorrt(load_file, precision_mode='FP32', batch_size=8):
 
     with gfile.GFile(load_file.replace('.pb', '.trt.pb'), 'wb') as f:
         f.write(trt_graph.SerializeToString())
-
