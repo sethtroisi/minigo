@@ -34,3 +34,18 @@ config_setting(
     name = "enable_lite",
     define_values = {"lite": "1"},
 )
+
+config_setting(
+    name = "enable_trt",
+    define_values = {"trt": "1"},
+)
+
+config_setting(
+    name = "enable_bt",
+    define_values = {"bt": "1"},
+)
+
+config_setting(
+    name = "enable_gpu",
+    define_values = {"gpu": "1"},
+)

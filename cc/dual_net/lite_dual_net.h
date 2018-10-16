@@ -18,32 +18,11 @@
 #include <memory>
 #include <string>
 
-#include "absl/types/span.h"
 #include "cc/dual_net/dual_net.h"
-#include "tensorflow/contrib/lite/context.h"
-#include "tensorflow/contrib/lite/interpreter.h"
-#include "tensorflow/contrib/lite/model.h"
 
 namespace minigo {
 
-class LiteDualNet : public DualNet {
- public:
-  explicit LiteDualNet(const std::string& graph_path);
-  ~LiteDualNet() override;
-
-  void RunMany(absl::Span<const BoardFeatures> features,
-               absl::Span<Output> outputs, std::string* model) override;
-
- private:
-  std::unique_ptr<tflite::FlatBufferModel> model_;
-  std::unique_ptr<tflite::Interpreter> interpreter_;
-
-  TfLiteTensor* input_ = nullptr;
-  TfLiteTensor* policy_ = nullptr;
-  TfLiteTensor* value_ = nullptr;
-
-  std::string graph_path_;
-};
+std::unique_ptr<DualNet> NewLiteDualNet(const std::string& model_path);
 
 }  // namespace minigo
 

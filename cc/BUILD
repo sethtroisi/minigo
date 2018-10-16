@@ -50,6 +50,23 @@ cc_library(
     linkopts = ["-ldl"],
 )
 
+cc_library(
+    name = "cuda",
+    deps = [
+        "@local_config_cuda//:cuda_headers",
+        "@local_config_cuda//:cudart",
+    ],
+)
+
+cc_library(
+    name = "tensorrt",
+    deps = [
+        "@local_config_tensorrt//:nv_infer",
+        "@local_config_tensorrt//:nvparsers",
+        "@local_config_tensorrt//:tensorrt_headers",
+    ],
+)
+
 minigo_cc_library(
     name = "base",
     srcs = [
@@ -97,6 +114,7 @@ minigo_cc_library(
         ":mcts",
         ":sgf",
         "//cc/dual_net",
+        "@com_github_nlohmann_json//:json",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
@@ -140,6 +158,7 @@ minigo_cc_library(
         "//cc/dual_net",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
     ],
@@ -158,6 +177,7 @@ minigo_cc_library(
         ":check",
         ":inline_vector",
         ":tiny_set",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 
@@ -204,20 +224,29 @@ cc_library(
 minigo_cc_library(
     name = "tf_utils",
     srcs = select({
-        "//cc/config:enable_tf": ["tf_utils.cc"],
-        "//conditions:default": ["tf_utils_dummy.cc"],
-    }),
+               "//cc/config:enable_tf": ["tf_utils.cc"],
+               "//conditions:default": ["tf_utils_dummy.cc"],
+           }) +
+           select({
+               "//cc/config:enable_bt": ["tf_bt_utils.cc"],
+               "//conditions:default": ["tf_bt_utils_dummy.cc"],
+           }),
     hdrs = ["tf_utils.h"],
     deps = [
-        ":base",
-        ":check",
-        ":mcts",
-        "//cc/file",
-        "//cc/dual_net",
-    ] + select({
-        "//cc/config:enable_tf": ["//cc:tensorflow"],
-        "//conditions:default": [],
-    }),
+               ":base",
+               ":check",
+               ":mcts",
+               "//cc/file",
+               "//cc/dual_net",
+               "@com_google_absl//absl/strings:str_format",
+           ] + select({
+               "//cc/config:enable_bt": ["@com_github_googlecloudplatform_google_cloud_cpp//google/cloud/bigtable:bigtable_client"],
+               "//conditions:default": [],
+           }) +
+           select({
+               "//cc/config:enable_tf": ["//cc:tensorflow"],
+               "//conditions:default": [],
+           }),
 )
 
 minigo_cc_library(
@@ -357,6 +386,22 @@ minigo_cc_binary(
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+    ],
+)
+
+minigo_cc_binary(
+    name = "tfrzz_to_cbt",
+    srcs = ["tfrzz_to_cbt.cc"],
+    deps = [
+        ":base",
+        ":check",
+        ":init",
+        ":tf_utils",
+        "//cc/file",
+        "@com_github_gflags_gflags//:gflags",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/time",
     ],
 )

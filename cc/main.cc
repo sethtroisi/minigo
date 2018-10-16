@@ -118,6 +118,10 @@ DEFINE_string(output_dir, "",
               "Output directory. If empty, no examples are written.");
 DEFINE_string(holdout_dir, "",
               "Holdout directory. If empty, no examples are written.");
+DEFINE_string(output_bigtable, "",
+              "Output Bigtable specification, of the form: "
+              "project,instance,table. "
+              "If empty, no examples are written to Bigtable.");
 DEFINE_string(sgf_dir, "", "SGF directory. If empty, no SGF is written.");
 DEFINE_double(holdout_pct, 0.03,
               "Fraction of games to hold out for validation.");
@@ -235,7 +239,7 @@ class SelfPlayer {
   void Run() {
     {
       absl::MutexLock lock(&mutex_);
-      dual_net_factory_ = NewDualNetFactory(FLAGS_model, FLAGS_parallel_games);
+      dual_net_factory_ = NewDualNetFactory(FLAGS_model);
     }
     for (int i = 0; i < FLAGS_parallel_games; ++i) {
       threads_.emplace_back(std::bind(&SelfPlayer::ThreadRun, this, i));
@@ -331,6 +335,15 @@ class SelfPlayer {
     const bool use_ansi_colors = isatty(fileno(stderr));
 
     GameOptions game_options;
+    std::vector<std::string> bigtable_spec =
+        absl::StrSplit(FLAGS_output_bigtable, ',');
+    bool use_bigtable = bigtable_spec.size() == 3;
+    if (!FLAGS_output_bigtable.empty() && !use_bigtable) {
+      MG_FATAL()
+          << "Bigtable output must be of the form: project,instance,table";
+      return;
+    }
+
     do {
       std::unique_ptr<MctsPlayer> player;
 
@@ -382,6 +395,13 @@ class SelfPlayer {
           is_holdout ? game_options.holdout_dir : game_options.output_dir;
       if (!example_dir.empty()) {
         tf_utils::WriteGameExamples(GetOutputDir(now, example_dir), output_name,
+                                    *player);
+      }
+      if (use_bigtable) {
+        const auto& gcp_project_name = bigtable_spec[0];
+        const auto& instance_name = bigtable_spec[1];
+        const auto& table_name = bigtable_spec[2];
+        tf_utils::WriteGameExamples(gcp_project_name, instance_name, table_name,
                                     *player);
       }
 
@@ -458,11 +478,11 @@ void Eval() {
   options.random_symmetry = true;
 
   options.name = std::string(file::Stem(FLAGS_model));
-  auto black_factory = NewDualNetFactory(FLAGS_model, 1);
+  auto black_factory = NewDualNetFactory(FLAGS_model);
   auto black = absl::make_unique<MctsPlayer>(black_factory->New(), options);
 
   options.name = std::string(file::Stem(FLAGS_model_two));
-  auto white_factory = NewDualNetFactory(FLAGS_model_two, 1);
+  auto white_factory = NewDualNetFactory(FLAGS_model_two);
   auto white = absl::make_unique<MctsPlayer>(white_factory->New(), options);
 
   auto* player = black.get();
@@ -494,13 +514,12 @@ void Gtp() {
   options.name = absl::StrCat("minigo-", file::Basename(FLAGS_model));
   options.ponder_limit = FLAGS_ponder_limit;
   options.courtesy_pass = FLAGS_courtesy_pass;
-  auto dual_net_factory = NewDualNetFactory(FLAGS_model, 1);
+  auto dual_net_factory = NewDualNetFactory(FLAGS_model);
   auto player = absl::make_unique<GtpPlayer>(dual_net_factory->New(), options);
   player->Run();
 }
 
 }  // namespace
-
 }  // namespace minigo
 
 int main(int argc, char* argv[]) {
