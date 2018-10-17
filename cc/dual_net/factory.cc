@@ -20,13 +20,6 @@
 #include "cc/dual_net/batching_dual_net.h"
 #include "gflags/gflags.h"
 
-#ifdef MG_ENABLE_REMOTE_DUAL_NET
-#include "cc/dual_net/inference_server.h"
-#ifndef MG_DEFAULT_ENGINE
-#define MG_DEFAULT_ENGINE "remote"
-#endif  // MG_DEFAULT_ENGINE
-#endif  // MG_ENABLE_REMOTE_DUAL_NET
-
 #ifdef MG_ENABLE_TF_DUAL_NET
 #include "cc/dual_net/tf_dual_net.h"
 #ifndef MG_DEFAULT_ENGINE
@@ -48,11 +41,9 @@
 #endif  // MG_DEFAULT_ENGINE
 #endif  // MG_ENABLE_TRT_DUAL_NET
 
+// Inference engine flags.
 DEFINE_string(engine, MG_DEFAULT_ENGINE,
               "The inference engine to use. Accepted values:"
-#ifdef MG_ENABLE_REMOTE_DUAL_NET
-              " \"remote\""
-#endif
 #ifdef MG_ENABLE_TF_DUAL_NET
               " \"tf\""
 #endif
@@ -64,18 +55,15 @@ DEFINE_string(engine, MG_DEFAULT_ENGINE,
 #endif
 );
 
+// Batching flags.
+// TODO(tommadams): Calculate batch_size from other arguments (virtual_lossess,
+// parallel_games, etc) instead of having an explicit flag.
+DEFINE_int32(batch_size, 256, "Inference batch size.");
+
 namespace minigo {
 namespace {
 
 std::unique_ptr<DualNet> NewDualNet(const std::string& graph_path) {
-  if (FLAGS_engine == "remote") {
-#ifdef MG_ENABLE_REMOTE_DUAL_NET
-    return NewInferenceServer(graph_path);
-#else
-    MG_FATAL() << "Binary wasn't compiled with remote inference support";
-#endif  // MG_ENABLE_REMOTE_DUAL_NET
-  }
-
   if (FLAGS_engine == "tf") {
 #ifdef MG_ENABLE_TF_DUAL_NET
     return NewTfDualNet(graph_path);
@@ -94,7 +82,7 @@ std::unique_ptr<DualNet> NewDualNet(const std::string& graph_path) {
 
   if (FLAGS_engine == "trt") {
 #ifdef MG_ENABLE_TRT_DUAL_NET
-    return NewTrtDualNet(graph_path);
+    return NewTrtDualNet(graph_path, FLAGS_batch_size);
 #else
     MG_FATAL() << "Binary wasn't compiled with TensorRT inference support";
 #endif  // MG_ENABLE_TRT_DUAL_NET
@@ -110,7 +98,8 @@ DualNetFactory::~DualNetFactory() = default;
 
 std::unique_ptr<DualNetFactory> NewDualNetFactory(
     const std::string& model_path) {
-  return NewBatchingFactory(NewDualNet(model_path));
+  return NewBatchingFactory(NewDualNet(model_path),
+                            static_cast<size_t>(FLAGS_batch_size));
 }
 
 }  // namespace minigo
