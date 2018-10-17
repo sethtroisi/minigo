@@ -168,6 +168,7 @@ class DualNetwork():
 
     def load_frozen_graph(self):
         # Can either be a frozen graph or a frozen tensorrt graph.
+        import tensorflow.contrib.tensorrt as trt
         graph_def = _load_graph_def(self.save_file)
 
         with self.sess.graph.as_default():
@@ -532,7 +533,7 @@ def freeze_graph(model_path):
         f.write(out_graph.SerializeToString())
 
 
-def freeze_tensorrt(load_file, precision_mode='INT8', batch_size=32):
+def freeze_tensorrt(load_file, precision_mode='FP16', batch_size=32):
     # TODO(sethtroisi): investigate why batch_size isn't enforced.
 
     assert load_file.endswith('.pb'), (
@@ -543,10 +544,13 @@ def freeze_tensorrt(load_file, precision_mode='INT8', batch_size=32):
     import tensorflow.contrib.tensorrt as trt
     trt_graph = trt.create_inference_graph(
         graph_def,
-        DualNet.OUTPUTS,
+        DualNetwork.OUTPUTS,
         max_batch_size=batch_size,
-        max_workspace_size_bytes=3000 * 2 ** 20,
+        max_workspace_size_bytes=2000 * 2 ** 20,
         precision_mode=precision_mode)
 
     with tf.gfile.GFile(load_file.replace('.pb', '.trt.pb'), 'wb') as f:
         f.write(trt_graph.SerializeToString())
+
+
+freeze_tensorrt("saved_models/000721-eagle.pb")
