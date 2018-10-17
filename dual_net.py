@@ -138,6 +138,9 @@ def _load_graph_def(model):
 
 
 class DualNetwork():
+    # Outputs of the tf graph.
+    OUTPUTS = ('value_output', 'policy_output')
+
     def __init__(self, save_file):
         self.save_file = save_file
         self.inference_input = None
@@ -146,7 +149,7 @@ class DualNetwork():
         config.gpu_options.allow_growth = True
         self.sess = tf.Session(graph=tf.Graph(), config=config)
 
-        if save_file.endswith('.pb'):
+        if save_file and save_file.endswith('.pb'):
             self.load_frozen_graph()
         else:
             self.initialize_graph()
@@ -167,12 +170,6 @@ class DualNetwork():
         # Can either be a frozen graph or a frozen tensorrt graph.
         graph_def = _load_graph_def(self.save_file)
 
-        if self.save_file.endswith('.trt.pb'):
-            # TODO(sethtroisi): Determine if TensorRT graph parallel-readouts
-            # must match (e.g. ==) or exceed (e.g. >=) batch_size.
-            import tensorflow.contrib.tensorrt as trt
-
-        outputs = ['value_output', 'policy_output']
         with self.sess.graph.as_default():
             feature, labels = get_inference_input()
             self.inference_input = feature
@@ -180,10 +177,10 @@ class DualNetwork():
             returns = tf.import_graph_def(
                 graph_def=graph_def,
                 input_map={'pos_tensor': feature},
-                return_elements=outputs)
+                return_elements=DualNetwork.OUTPUTS)
 
             self.inference_output = {name: op.outputs[0]
-                for name, op in zip(outputs, returns)}
+                for name, op in zip(DualNetwork.OUTPUTS, returns)}
 
     def initialize_weights(self, save_file):
         """Initialize the weights from the given save_file.
@@ -535,7 +532,9 @@ def freeze_graph(model_path):
         f.write(out_graph.SerializeToString())
 
 
-def freeze_tensorrt(load_file, precision_mode='FP32', batch_size=8):
+def freeze_tensorrt(load_file, precision_mode='INT8', batch_size=32):
+    # TODO(sethtroisi): investigate why batch_size isn't enforced.
+
     assert load_file.endswith('.pb'), (
         'freeze_tensorrt takes a pb file', load_file)
 
@@ -544,10 +543,10 @@ def freeze_tensorrt(load_file, precision_mode='FP32', batch_size=8):
     import tensorflow.contrib.tensorrt as trt
     trt_graph = trt.create_inference_graph(
         graph_def,
-        ['policy_output', 'value_output'],
+        DualNet.OUTPUTS,
         max_batch_size=batch_size,
-        max_workspace_size_bytes=100 * 2 ** 20,
+        max_workspace_size_bytes=3000 * 2 ** 20,
         precision_mode=precision_mode)
 
-    with gfile.GFile(load_file.replace('.pb', '.trt.pb'), 'wb') as f:
+    with tf.gfile.GFile(load_file.replace('.pb', '.trt.pb'), 'wb') as f:
         f.write(trt_graph.SerializeToString())
