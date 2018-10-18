@@ -19,17 +19,15 @@ move prediction and score estimation.
 """
 
 from absl import flags
-import argparse
 import functools
 import os.path
 import sys
 
-import argh
+import fire
 from tqdm import tqdm
 import numpy as np
 import tensorflow as tf
 from tensorflow.contrib import summary
-from tensorflow.python.training.summary_io import SummaryWriterCache
 from tensorflow.contrib.tpu.python.tpu import tpu_config
 from tensorflow.contrib.tpu.python.tpu import tpu_estimator
 from tensorflow.contrib.tpu.python.tpu import tpu_optimizer
@@ -46,6 +44,12 @@ flags.DEFINE_integer('train_batch_size', 256,
 
 flags.DEFINE_integer('conv_width', 256 if go.N == 19 else 32,
                      'The width of each conv layer in the shared trunk.')
+
+flags.DEFINE_integer('policy_conv_width', 2,
+                     'The width of the policy conv layer.')
+
+flags.DEFINE_integer('value_conv_width', 1,
+                     'The width of the value conv layer.')
 
 flags.DEFINE_integer('fc_width', 256 if go.N == 19 else 64,
                      'The width of the fully connected layer in value head.')
@@ -69,14 +73,19 @@ flags.DEFINE_float('value_cost_weight', 1.0,
 flags.DEFINE_float('sgd_momentum', 0.9,
                    'Momentum parameter for learning rate.')
 
-flags.DEFINE_string('model_dir', None,
-                    'The working directory of the model')
-
-# See www.moderndescartes.com/essays/shuffle_viz for discussion on sizing
-flags.DEFINE_integer('shuffle_buffer_size', 2000,
-                     'Size of buffer used to shuffle train examples.')
+flags.DEFINE_string('work_dir', None,
+                    'The Estimator working directory. Used to dump: '
+                    'checkpoints, tensorboard logs, etc..')
 
 flags.DEFINE_bool('use_tpu', False, 'Whether to use TPU for training.')
+
+flags.DEFINE_bool('quantize', False,
+                  'Whether create a quantized model. When loading a model for '
+                  'inference, this must match how the model was trained.')
+
+flags.DEFINE_integer('quant_delay', 700 * 1024,
+                     'Number of training steps after which weights and '
+                     'activations are quantized.')
 
 flags.DEFINE_string(
     'tpu_name', None,
@@ -105,6 +114,13 @@ flags.DEFINE_integer(
     'summary_steps', default=256,
     help='Number of steps between logging summary scalars.')
 
+flags.DEFINE_integer(
+    'keep_checkpoint_max', default=5, help='Number of checkpoints to keep.')
+
+flags.DEFINE_bool(
+    'use_random_symmetry', True,
+    help='If true random symmetries be used when doing inference.')
+
 flags.register_multi_flags_validator(
     ['use_tpu', 'iterations_per_loop', 'summary_steps'],
     lambda flags: (not flags['use_tpu'] or
@@ -112,11 +128,6 @@ flags.register_multi_flags_validator(
     'If use_tpu, summary_steps must be a multiple of iterations_per_loop')
 
 FLAGS = flags.FLAGS
-
-
-# How many positions to look at per generation.
-# Per AGZ, 2048 minibatch * 1k = 2M positions/generation
-EXAMPLES_PER_GENERATION = 2 ** 21
 
 
 class DualNetwork():
@@ -149,20 +160,19 @@ class DualNetwork():
         without redifining the entire graph."""
         tf.train.Saver().restore(self.sess, save_file)
 
-    def run(self, position, use_random_symmetry=True):
-        probs, values = self.run_many([position],
-                                      use_random_symmetry=use_random_symmetry)
+    def run(self, position):
+        probs, values = self.run_many([position])
         return probs[0], values[0]
 
-    def run_many(self, positions, use_random_symmetry=True):
+    def run_many(self, positions):
         processed = list(map(features_lib.extract_features, positions))
-        if use_random_symmetry:
+        if FLAGS.use_random_symmetry:
             syms_used, processed = symmetries.randomize_symmetries_feat(
                 processed)
         outputs = self.sess.run(self.inference_output,
                                 feed_dict={self.inference_input: processed})
         probabilities, value = outputs['policy_output'], outputs['value_output']
-        if use_random_symmetry:
+        if FLAGS.use_random_symmetry:
             probabilities = symmetries.invert_symmetries_pi(
                 syms_used, probabilities)
         return probabilities, value
@@ -223,6 +233,15 @@ def model_fn(features, labels, mode, params=None):
     learning_rate = tf.train.piecewise_constant(
         global_step, FLAGS.lr_boundaries, FLAGS.lr_rates)
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+
+    # Insert quantization ops if requested
+    if FLAGS.quantize:
+        if mode == tf.estimator.ModeKeys.TRAIN:
+            tf.contrib.quantize.create_training_graph(
+                quant_delay=FLAGS.quant_delay)
+        else:
+            tf.contrib.quantize.create_eval_graph()
+
     optimizer = tf.train.MomentumOptimizer(learning_rate, FLAGS.sgd_momentum)
     if FLAGS.use_tpu:
         optimizer = tpu_optimizer.CrossShardOptimizer(optimizer)
@@ -268,18 +287,22 @@ def model_fn(features, labels, mode, params=None):
         if est_mode == tf.estimator.ModeKeys.EVAL:
             return metric_ops
 
+        # NOTE: global_step is rounded to a multiple of FLAGS.summary_steps.
+        eval_step = tf.reduce_min(step)
+
         # Create summary ops so that they show up in SUMMARIES collection
         # That way, they get logged automatically during training
-        summary_writer = summary.create_file_writer(FLAGS.model_dir)
+        summary_writer = summary.create_file_writer(FLAGS.work_dir)
         with summary_writer.as_default(), \
-                summary.always_record_summaries():
+                summary.record_summaries_every_n_global_steps(
+                    FLAGS.summary_steps, eval_step):
             for metric_name, metric_op in metric_ops.items():
-                summary.scalar(metric_name, metric_op[1])
+                summary.scalar(metric_name, metric_op[1], step=eval_step)
 
         # Reset metrics occasionally so that they are mean of recent batches.
         reset_op = tf.variables_initializer(tf.local_variables("metrics"))
         cond_reset_op = tf.cond(
-            tf.equal(tf.mod(tf.reduce_min(step), FLAGS.summary_steps), tf.to_int64(1)),
+            tf.equal(eval_step % FLAGS.summary_steps, tf.to_int64(1)),
             lambda: reset_op,
             lambda: tf.no_op())
 
@@ -364,20 +387,22 @@ def model_inference_fn(features, training):
         shared_output = my_res_layer(shared_output)
 
     # policy head
-    policy_conv = my_conv2d(shared_output, filters=2, kernel_size=1)
+    policy_conv = my_conv2d(
+        shared_output, filters=FLAGS.policy_conv_width, kernel_size=1)
     policy_conv = tf.nn.relu(my_batchn(policy_conv, center=False, scale=False))
     logits = tf.layers.dense(
-        tf.reshape(policy_conv, [-1, 2 * go.N * go.N]),
+        tf.reshape(policy_conv, [-1, FLAGS.policy_conv_width * go.N * go.N]),
         go.N * go.N + 1)
 
     policy_output = tf.nn.softmax(logits, name='policy_output')
 
     # value head
-    value_conv = my_conv2d(shared_output, filters=1, kernel_size=1)
+    value_conv = my_conv2d(
+        shared_output, filters=FLAGS.value_conv_width, kernel_size=1)
     value_conv = tf.nn.relu(my_batchn(value_conv, center=False, scale=False))
 
     value_fc_hidden = tf.nn.relu(tf.layers.dense(
-        tf.reshape(value_conv, [-1, go.N * go.N]),
+        tf.reshape(value_conv, [-1, FLAGS.value_conv_width * go.N * go.N]),
         FLAGS.fc_width))
     value_output = tf.nn.tanh(
         tf.reshape(tf.layers.dense(value_fc_hidden, 1), [-1]),
@@ -386,18 +411,41 @@ def model_inference_fn(features, training):
     return policy_output, value_output, logits
 
 
-def get_estimator(working_dir):
-    if FLAGS.use_tpu:
-        return get_tpu_estimator(working_dir)
+def const_model_inference_fn(features):
+    """Builds the model graph with weights marked as constant.
 
-    run_config = tf.estimator.RunConfig(save_summary_steps=FLAGS.summary_steps)
+    This improves TPU inference performance because it prevents the weights
+    being transferred to the TPU every call to Session.run().
+
+    Returns:
+        (policy_output, value_output, logits) tuple of tensors.
+    """
+    def custom_getter(getter, name, *args, **kwargs):
+        with tf.control_dependencies(None):
+            return tf.guarantee_const(
+                getter(name, *args, **kwargs), name=name + "/GuaranteeConst")
+    with tf.variable_scope("", custom_getter=custom_getter):
+        return model_inference_fn(features, False)
+
+
+def get_estimator():
+    if FLAGS.use_tpu:
+        return _get_tpu_estimator()
+    else:
+        return _get_nontpu_estimator()
+
+
+def _get_nontpu_estimator():
+    run_config = tf.estimator.RunConfig(
+        save_summary_steps=FLAGS.summary_steps,
+        keep_checkpoint_max=FLAGS.keep_checkpoint_max)
     return tf.estimator.Estimator(
         model_fn,
-        model_dir=working_dir,
+        model_dir=FLAGS.work_dir,
         config=run_config)
 
 
-def get_tpu_estimator(working_dir):
+def _get_tpu_estimator():
     tpu_cluster_resolver = tf.contrib.cluster_resolver.TPUClusterResolver(
         FLAGS.tpu_name, zone=None, project=None)
     tpu_grpc_url = tpu_cluster_resolver.get_master()
@@ -405,9 +453,10 @@ def get_tpu_estimator(working_dir):
     run_config = tpu_config.RunConfig(
         master=tpu_grpc_url,
         evaluation_master=tpu_grpc_url,
-        model_dir=working_dir,
+        model_dir=FLAGS.work_dir,
         save_checkpoints_steps=max(1000, FLAGS.iterations_per_loop),
         save_summary_steps=FLAGS.summary_steps,
+        keep_checkpoint_max=FLAGS.keep_checkpoint_max,
         session_config=tf.ConfigProto(
             allow_soft_placement=True, log_device_placement=True),
         tpu_config=tpu_config.TPUConfig(
@@ -423,21 +472,16 @@ def get_tpu_estimator(working_dir):
         eval_batch_size=FLAGS.train_batch_size * FLAGS.num_tpu_cores)
 
 
-def bootstrap(working_dir):
-    """Initialize a tf.Estimator run with random initial weights.
-
-    Args:
-        working_dir: The directory where tf.estimator will drop logs,
-            checkpoints, and so on
-    """
+def bootstrap():
+    """Initialize a tf.Estimator run with random initial weights."""
     # a bit hacky - forge an initial checkpoint with the name that subsequent
     # Estimator runs will expect to find.
     #
     # Estimator will do this automatically when you call train(), but calling
     # train() requires data, and I didn't feel like creating training data in
     # order to run the full train pipeline for 1 step.
-    estimator_initial_checkpoint_name = 'model.ckpt-1'
-    save_file = os.path.join(working_dir, estimator_initial_checkpoint_name)
+    initial_checkpoint_name = 'model.ckpt-1'
+    save_file = os.path.join(FLAGS.work_dir, initial_checkpoint_name)
     sess = tf.Session(graph=tf.Graph())
     with sess.graph.as_default():
         features, labels = get_inference_input()
@@ -446,17 +490,16 @@ def bootstrap(working_dir):
         tf.train.Saver().save(sess, save_file)
 
 
-def export_model(working_dir, model_path):
+def export_model(model_path):
     """Take the latest checkpoint and export it to model_path for selfplay.
 
     Assumes that all relevant model files are prefixed by the same name.
     (For example, foo.index, foo.meta and foo.data-00000-of-00001).
 
     Args:
-        working_dir: The directory where tf.estimator keeps its checkpoints
         model_path: The path (can be a gs:// path) to export model to
     """
-    estimator = tf.estimator.Estimator(model_fn, model_dir=working_dir)
+    estimator = tf.estimator.Estimator(model_fn, model_dir=FLAGS.work_dir)
     latest_checkpoint = estimator.latest_checkpoint()
     all_checkpoint_files = tf.gfile.Glob(latest_checkpoint + '*')
     for filename in all_checkpoint_files:
@@ -464,128 +507,57 @@ def export_model(working_dir, model_path):
         destination_path = model_path + suffix
         print("Copying {} to {}".format(filename, destination_path))
         tf.gfile.Copy(filename, destination_path)
+    # also export a .pb for C++ inference
+    freeze_graph(model_path)
 
 
-def train(
-        *tf_records: "Records to train on",
-        steps: "Number of steps to train. If not set iterates over "
-               "tf_records and sets steps to examples / batch_size"=-1):
-    tf.logging.set_verbosity(tf.logging.INFO)
-    estimator = get_estimator(FLAGS.model_dir)
-
-    effective_batch_size = FLAGS.train_batch_size
-    if FLAGS.use_tpu:
-        effective_batch_size *= FLAGS.num_tpu_cores
-
-    if steps == -1:
-        def count_examples(tf_record):
-            opts = preprocessing.TF_RECORD_CONFIG
-            return sum(1 for _ in tqdm(
-                tf.python_io.tf_record_iterator(tf_record, opts),
-                desc=tf_record))
-
-        total_examples = sum(map(count_examples, tf_records))
-        steps = total_examples // effective_batch_size
-
-    if FLAGS.use_tpu:
-        def input_fn(params):
-            return preprocessing.get_tpu_input_tensors(
-                params['batch_size'],
-                tf_records,
-                random_rotation=True)
-        # TODO: get hooks working again with TPUestimator.
-        hooks = []
-    else:
-        def input_fn():
-            return preprocessing.get_input_tensors(
-                FLAGS.train_batch_size,
-                tf_records,
-                filter_amount=1.0,
-                shuffle_buffer_size=FLAGS.shuffle_buffer_size,
-                random_rotation=True)
-
-        hooks = [UpdateRatioSessionHook(FLAGS.model_dir),
-                 EchoStepCounterHook(output_dir=FLAGS.model_dir)]
-
-    print("Training, steps = {} x{} = {} examples".format(
-        steps, effective_batch_size, steps * effective_batch_size))
-    estimator.train(input_fn, steps=steps, hooks=hooks)
+def freeze_graph(model_path):
+    n = DualNetwork(model_path)
+    out_graph = tf.graph_util.convert_variables_to_constants(
+        n.sess, n.sess.graph.as_graph_def(), ["policy_output", "value_output"])
+    with tf.gfile.GFile(model_path + '.pb', 'wb') as f:
+        f.write(out_graph.SerializeToString())
 
 
-def validate(tf_records, validate_name=None):
-    validate_name = validate_name or "selfplay"
+def freeze_graph_tpu(model_path):
+    """Custom freeze_graph implementation for Cloud TPU."""
 
-    if FLAGS.use_tpu:
-        def input_fn(params):
-            return preprocessing.get_tpu_input_tensors(
-                params['batch_size'],
-                tf_records, filter_amount=0.05)
-    else:
-        def input_fn():
-            return preprocessing.get_input_tensors(
-                FLAGS.train_batch_size, tf_records, filter_amount=0.05,
-                shuffle_buffer_size=20000)
+    assert FLAGS.tpu_name
+    sess = tf.Session(FLAGS.tpu_name)
 
-    estimator = get_estimator(FLAGS.model_dir)
-    estimator.evaluate(input_fn, steps=50, name=validate_name)
+    output_names = []
+    with sess.graph.as_default():
+        # Replicate the inference function for each TPU core.
+        replicated_features = []
+        for i in range(FLAGS.parallel_tpus):
+            features = tf.placeholder(
+                tf.float32, [None, go.N, go.N,
+                             features_lib.NEW_FEATURES_PLANES],
+                name='pos_tensor_%d' % i)
+            replicated_features.append((features,))
+        outputs = tf.contrib.tpu.replicate(
+            const_model_inference_fn, replicated_features)
 
+        # The replicate op assigns names like output_0_shard_0 to the output
+        # names. Give them human readable names.
+        for i, (policy_output, value_output, _) in enumerate(outputs):
+            policy_name = 'policy_output_%d' % i
+            value_name = 'value_output_%d' % i
+            output_names.extend([policy_name, value_name])
+            tf.identity(policy_output, policy_name)
+            tf.identity(value_output, value_name)
 
-def compute_update_ratio(weight_tensors, before_weights, after_weights):
-    """Compute the ratio of gradient norm to weight norm."""
-    deltas = [after - before for after,
-              before in zip(after_weights, before_weights)]
-    delta_norms = [np.linalg.norm(d.ravel()) for d in deltas]
-    weight_norms = [np.linalg.norm(w.ravel()) for w in before_weights]
-    ratios = [d / w for d, w in zip(delta_norms, weight_norms)]
-    all_summaries = [
-        tf.Summary.Value(tag='update_ratios/' +
-                         tensor.name, simple_value=ratio)
-        for tensor, ratio in zip(weight_tensors, ratios)]
-    return tf.Summary(value=all_summaries)
+        # Add initialize and shutdown TPU ops.
+        init_def = tf.contrib.tpu.initialize_system()
+        shutdown_def = tf.contrib.tpu.shutdown_system()
 
+        tf.train.Saver().restore(sess, model_path)
 
-class EchoStepCounterHook(tf.train.StepCounterHook):
-    def _log_and_record(self, elapsed_steps, elapsed_time, global_step):
-        s_per_sec = elapsed_steps / elapsed_time
-        print("{}: {:.3f} steps per second".format(global_step, s_per_sec))
-        super()._log_and_record(elapsed_steps, elapsed_time, global_step)
+    # Make sure we serialize the initialize and shutdown TPU ops.
+    output_names.extend(['ConfigureDistributedTPU', 'ShutdownDistributedTPU'])
 
-
-class UpdateRatioSessionHook(tf.train.SessionRunHook):
-    def __init__(self, working_dir, every_n_steps=1000):
-        self.working_dir = working_dir
-        self.every_n_steps = every_n_steps
-        self.before_weights = None
-
-    def begin(self):
-        # These calls only works because the SessionRunHook api guarantees this
-        # will get called within a graph context containing our model graph.
-
-        self.summary_writer = SummaryWriterCache.get(self.working_dir)
-        self.weight_tensors = tf.trainable_variables()
-        self.global_step = tf.train.get_or_create_global_step()
-
-    def before_run(self, run_context):
-        global_step = run_context.session.run(self.global_step)
-        if global_step % self.every_n_steps == 0:
-            self.before_weights = run_context.session.run(self.weight_tensors)
-
-    def after_run(self, run_context, run_values):
-        global_step = run_context.session.run(self.global_step)
-        if self.before_weights is not None:
-            after_weights = run_context.session.run(self.weight_tensors)
-            weight_update_summaries = compute_update_ratio(
-                self.weight_tensors, self.before_weights, after_weights)
-            self.summary_writer.add_summary(
-                weight_update_summaries, global_step)
-            self.before_weights = None
-
-
-parser = argparse.ArgumentParser()
-argh.add_commands(parser, [train, export_model, validate])
-
-if __name__ == '__main__':
-    # Let absl.flags parse known flags from argv, then pass the remaining flags
-    # into argh for dispatching.
-    remaining_argv = flags.FLAGS(sys.argv, known_only=True)
-    argh.dispatch(parser, argv=remaining_argv[1:])
+    # Freeze the graph.
+    model_def = tf.graph_util.convert_variables_to_constants(
+        sess, sess.graph.as_graph_def(), output_names)
+    with tf.gfile.GFile(model_path + '.pb', 'wb') as f:
+        f.write(model_def.SerializeToString())

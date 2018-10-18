@@ -17,11 +17,10 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
-#include <iomanip>
-#include <sstream>
 #include <tuple>
 #include <utility>
 
+#include "absl/strings/str_format.h"
 #include "cc/algorithm.h"
 #include "cc/check.h"
 
@@ -49,10 +48,46 @@ MctsNode::MctsNode(MctsNode* parent, Coord move)
   }
 }
 
-std::string MctsNode::Describe() const {
-  using std::setprecision;
-  using std::setw;
+Coord MctsNode::GetMostVisitedMove() const {
+  // Find the set of moves with the largest N.
+  inline_vector<Coord, kNumMoves> moves;
+  moves.push_back(0);
+  int best_N = child_N(0);
+  for (int i = 1; i < kNumMoves; ++i) {
+    int cn = child_N(i);
+    if (cn > best_N) {
+      moves.clear();
+      moves.push_back(i);
+      best_N = cn;
+    } else if (cn == best_N) {
+      moves.push_back(i);
+    }
+  }
 
+  // If there's only one move with the largest N, we're done.
+  if (moves.size() == 1) {
+    return moves[0];
+  }
+
+  // Otherwise, break score using the child action score.
+  float to_play = position.to_play() == Color::kBlack ? 1 : -1;
+  float U_scale = kPuct * std::sqrt(1.0f + N());
+
+  Coord c = moves[0];
+  float best_cas =
+      CalculateSingleMoveChildActionScore(to_play, U_scale, moves[0]);
+  for (int i = 0; i < moves.size(); ++i) {
+    float cas = CalculateSingleMoveChildActionScore(to_play, U_scale, moves[i]);
+    if (cas > best_cas) {
+      best_cas = cas;
+      c = moves[i];
+    }
+  }
+
+  return c;
+}
+
+std::string MctsNode::Describe() const {
   auto child_action_score = CalculateChildActionScore();
   using SortInfo = std::tuple<float, float, int>;
   std::array<SortInfo, kNumMoves> sort_order;
@@ -61,12 +96,10 @@ std::string MctsNode::Describe() const {
   }
   std::sort(sort_order.begin(), sort_order.end(), std::greater<SortInfo>());
 
-  std::ostringstream oss;
-  oss << std::fixed;
-  oss << setprecision(4) << Q() << "\n";
-  oss << MostVisitedPathString() << "\n";
-  oss << "move : action    Q     U     P   P-Dir    N  soft-N  p-delta  "
-         "p-rel";
+  auto result = absl::StrFormat(
+      "%0.4f\n%s\n"
+      "move : action    Q     U     P   P-Dir    N  soft-N  p-delta  p-rel",
+      Q(), MostVisitedPathString());
 
   float child_N_sum = 0;
   for (const auto& e : edges) {
@@ -77,29 +110,21 @@ std::string MctsNode::Describe() const {
     float soft_N = child_N(i) / child_N_sum;
     float p_delta = soft_N - child_P(i);
     float p_rel = p_delta / child_P(i);
-    // clang-format off
-    oss << "\n" << std::left << setw(5) << i.ToKgs() << std::right
-        << ": " << setw(6) << setprecision(3) << child_action_score[i]
-        << " " << setw(6) << _child_Q(i)
-        << " " << setw(5) << child_U(i)
-        << " " << setw(5) << child_P(i)
-        << " " << setw(5) << child_original_P(i)
-        << " " << setw(5) << static_cast<int>(child_N(i))
-        << " " << setw(5) << setprecision(4) << soft_N
-        << " " << setw(8) << setprecision(5) << p_delta
-        << " " << setw(5) << setprecision(2) << p_rel;
-    // clang-format on
+    absl::StrAppendFormat(
+        &result,
+        "\n%-5s: % 4.3f % 4.3f %0.3f %0.3f %0.3f %5d %0.4f % 6.5f % 3.2f",
+        i.ToKgs(), child_action_score[i], _child_Q(i), child_U(i), child_P(i),
+        child_original_P(i), static_cast<int>(child_N(i)), soft_N, p_delta,
+        p_rel);
   }
-  return oss.str();
+  return result;
 }
 
 std::vector<Coord> MctsNode::MostVisitedPath() const {
   std::vector<Coord> path;
   const auto* node = this;
   while (!node->children.empty()) {
-    int next_kid = ArgMax(
-        node->edges,
-        [](const EdgeStats& a, const EdgeStats& b) { return a.N < b.N; });
+    Coord next_kid = node->GetMostVisitedMove();
     path.push_back(next_kid);
     auto it = node->children.find(next_kid);
     MG_CHECK(it != node->children.end());
@@ -109,18 +134,17 @@ std::vector<Coord> MctsNode::MostVisitedPath() const {
 }
 
 std::string MctsNode::MostVisitedPathString() const {
-  std::ostringstream oss;
+  std::string result;
   const auto* node = this;
   for (Coord c : MostVisitedPath()) {
     auto it = node->children.find(c);
     MG_CHECK(it != node->children.end());
-
-    oss << node->move.ToKgs() << " (" << static_cast<int>(node->N())
-        << ") ==> ";
     node = it->second.get();
+    absl::StrAppendFormat(&result, "%s (%d) ==> ", node->move.ToKgs(),
+                          static_cast<int>(node->N()));
   }
-  oss << std::fixed << std::setprecision(5) << "Q: " << node->Q();
-  return oss.str();
+  absl::StrAppendFormat(&result, "Q: %0.5f", node->Q());
+  return result;
 }
 
 void MctsNode::GetMoveHistory(
@@ -161,8 +185,6 @@ void MctsNode::InjectNoise(const std::array<float, kNumMoves>& noise) {
 MctsNode* MctsNode::SelectLeaf() {
   auto* node = this;
   for (;;) {
-    ++node->stats->N;
-
     // If a node has never been evaluated, we have no basis to select a child.
     if (!node->is_expanded) {
       return node;
@@ -189,9 +211,8 @@ void MctsNode::IncorporateResults(absl::Span<const float> move_probabilities,
   assert(!position.is_game_over());
 
   // If the node has already been selected for the next inference batch, we
-  // shouldn't select it again.
+  // shouldn't 'expand' it again.
   if (is_expanded) {
-    RevertVisits(up_to);
     return;
   }
 
@@ -212,7 +233,17 @@ void MctsNode::IncorporateResults(absl::Span<const float> move_probabilities,
         illegal_moves[i] ? 0 : policy_scalar * move_probabilities[i];
 
     edges[i].original_P = edges[i].P = move_prob;
-    edges[i].W = 0;
+    // Initialize child Q as current node's value, to prevent dynamics where
+    // if B is winning, then B will only ever explore 1 move, because the Q
+    // estimation will be so much larger than the 0 of the other moves.
+    //
+    // Conversely, if W is winning, then B will explore all 362 moves before
+    // continuing to explore the most favorable move. This is a waste of
+    // search.
+    //
+    // The value seeded here acts as a prior, and gets averaged into Q
+    // calculations.
+    edges[i].W = value;
   }
   BackupValue(value, up_to);
 }
@@ -223,21 +254,11 @@ void MctsNode::IncorporateEndGameResult(float value, MctsNode* up_to) {
   BackupValue(value, up_to);
 }
 
-void MctsNode::RevertVisits(MctsNode* up_to) {
-  auto* node = this;
-  for (;;) {
-    node->stats->N -= 1;
-    if (node == up_to) {
-      return;
-    }
-    node = node->parent;
-  }
-}
-
 void MctsNode::BackupValue(float value, MctsNode* up_to) {
   auto* node = this;
   for (;;) {
     node->stats->W += value;
+    ++node->stats->N;
     if (node == up_to) {
       return;
     }
@@ -272,13 +293,11 @@ void MctsNode::PruneChildren(Coord c) {
 
 std::array<float, kNumMoves> MctsNode::CalculateChildActionScore() const {
   float to_play = position.to_play() == Color::kBlack ? 1 : -1;
-  float U_scale = kPuct * std::sqrt(1.0f + N());
+  float U_scale = kPuct * std::sqrt(std::max<float>(1, N() - 1));
 
   std::array<float, kNumMoves> result;
   for (int i = 0; i < kNumMoves; ++i) {
-    float Q = _child_Q(i);
-    float U = U_scale * child_P(i) / (1 + child_N(i));
-    result[i] = Q * to_play + U - 1000.0f * illegal_moves[i];
+    result[i] = CalculateSingleMoveChildActionScore(to_play, U_scale, i);
   }
   return result;
 }

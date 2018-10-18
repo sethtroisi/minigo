@@ -69,11 +69,16 @@ class MctsNode {
     // This works better than init-to-0 or init-to-static-parent-q because
     // it updates explore/exploit as the parent Q evolves, this is espectially
     // important for children with 0 visit.
-    return (Q() + child_W(i)) / (1 + child_N(i));
+    return (Q() + child_W(i)) / (2 + child_N(i));
   }
   float child_U(int i) const {
-    return kPuct * std::sqrt(1.0f + N()) * child_P(i) / (1 + child_N(i));
+    return kPuct * std::sqrt(std::max<float>(1, N() - 1)) * child_P(i) /
+           (1 + child_N(i));
   }
+
+  // Finds the best move by visit count, N. Ties are broken using the child
+  // action score.
+  Coord GetMostVisitedMove() const;
 
   std::string Describe() const;
   std::string MostVisitedPathString() const;
@@ -99,14 +104,6 @@ class MctsNode {
 
   void IncorporateEndGameResult(float value, MctsNode* up_to);
 
-  // Sometimes, repeated calls to select_leaf return the same node.  This is
-  // rare and we're okay with the wasted computation to evaluate the position
-  // multiple times by the dual_net. But select_leaf has the side effect of
-  // incrementing visit counts. Since we want the value to only count once for
-  // the repeatedly selected node, we also have to revert the incremented visit
-  // counts.
-  void RevertVisits(MctsNode* up_to);
-
   void BackupValue(float value, MctsNode* up_to);
 
   void AddVirtualLoss(MctsNode* up_to);
@@ -119,6 +116,13 @@ class MctsNode {
   // TODO(tommadams): Validate returning by value has the same performance as
   // passing a pointer to the output array.
   std::array<float, kNumMoves> CalculateChildActionScore() const;
+
+  float CalculateSingleMoveChildActionScore(float to_play, float U_scale,
+                                            int i) const {
+    float Q = _child_Q(i);
+    float U = U_scale * child_P(i) / (1 + child_N(i));
+    return Q * to_play + U - 1000.0f * illegal_moves[i];
+  }
 
   MctsNode* MaybeAddChild(Coord c);
 

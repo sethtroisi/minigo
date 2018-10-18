@@ -12,8 +12,9 @@ independent effort by Go enthusiasts to replicate the results of the AlphaGo
 Zero paper ("Mastering the Game of Go without Human Knowledge," *Nature*), with
 some resources generously made available by Google.
 
-Minigo is based off of Brian Lee's "MuGo" -- a pure Python implementation of the
-first AlphaGo paper ["Mastering the Game of Go with Deep Neural Networks and
+Minigo is based off of Brian Lee's "[MuGo](https://github.com/brilee/MuGo)"
+-- a pure Python implementation of the first AlphaGo paper
+["Mastering the Game of Go with Deep Neural Networks and
 Tree Search"](https://www.nature.com/articles/nature16961) published in
 *Nature*. This implementation adds features and architecture changes present in
 the more recent AlphaGo Zero paper, ["Mastering the Game of Go without Human
@@ -86,11 +87,11 @@ pip3 install -r requirements.txt
 
 Then, you'll need to choose to install the GPU or CPU tensorflow requirements:
 
-- GPU: `pip3 install "tensorflow-gpu>=1.9,<1.10"`.
+- GPU: `pip3 install "tensorflow-gpu>=1.11,<1.12"`.
   - *Note*: You must install [CUDA
     9.0](https://developer.nvidia.com/cuda-90-download-archive). for Tensorflow
     1.5+.
-- CPU: `pip3 install "tensorflow>=1.9,<1.10"`.
+- CPU: `pip3 install "tensorflow>=1.11,<1.12"`.
 
 Setting up the Environment
 --------------------------
@@ -113,6 +114,13 @@ Running unit tests
 ------------------
 ```
 ./test.sh
+```
+
+To run individual modules
+
+```
+BOARD_SIZE=9 python3 tests/run_tests.py test_go
+BOARD_SIZE=19 python3 tests/run_tests.py test_mcts
 ```
 
 Automated Tests
@@ -144,8 +152,9 @@ Otherwise, all commands fetching files from GCS will hang.
 
 For instance, this would set a bucket, authenticate, and then look for the most
 recent model.
-```bash
-# When you first start we reccomend using our minigo-pub bucket.
+
+```shell
+# When you first start we recommend using our minigo-pub bucket.
 # Later you can setup your own bucket and store data there.
 export BUCKET_NAME=minigo-pub/v9-19x19
 gcloud auth application-default login
@@ -166,13 +175,14 @@ argument usually need the path to the model basename, e.g.
 `gs://$BUCKET_NAME/models/000737-fury`
 
 You'll need to copy them to your local disk.  This fragment copies the files
-associated with $MODEL_NAME to the directory specified by `MINIGO_MODELS`
+associated with `$MODEL_NAME` to the directory specified by `MINIGO_MODELS`:
 
 ```shell
-MODEL_NAME=000532-ace
+MODEL_NAME=000737-fury
 MINIGO_MODELS=$HOME/minigo-models
-mkdir -p $MINIGO_MODELS
-gsutil ls gs://$BUCKET_NAME/models | grep $MODEL_NAME | gsutil cp -I $MINIGO_MODELS
+mkdir -p $MINIGO_MODELS/models
+gsutil ls gs://$BUCKET_NAME/models/$MODEL_NAME.* | \
+       gsutil cp -I $MINIGO_MODELS/models
 ```
 
 Selfplay
@@ -181,12 +191,15 @@ To watch Minigo play a game, you need to specify a model. Here's an example
 to play using the latest model in your bucket
 
 ```shell
-READOUTS=400
-python rl_loop.py selfplay --num_readouts=$READOUTS -v 2
+python3 selfplay.py \
+  --verbose=2 \
+  --num_readouts=400 \
+  --load_file=$MINIGO_MODELS/models/$MODEL_NAME
 ```
+
 where `READOUTS` is how many searches to make per move.  Timing information and
-statistics will be printed at each move.  Setting verbosity (-v) to 3 or higher
-will print a board at each move.
+statistics will be printed at each move.  Setting verbosity to 3 or
+higher will print a board at each move.
 
 Playing Against Minigo
 ----------------------
@@ -195,7 +208,7 @@ Minigo uses the
 [GTP Protocol](http://www.lysator.liu.se/~gunnar/gtp/gtp2-spec-draft2/gtp2-spec.html),
 and you can use any gtp-compliant program with it.
 
-```
+```shell
 # Latest model should look like: /path/to/models/000123-something
 LATEST_MODEL=$(ls -d $MINIGO_MODELS/* | tail -1 | cut -f 1 -d '.')
 BOARD_SIZE=19 python3 gtp.py --load_file=$LATEST_MODEL --num_readouts=$READOUTS --verbose=3
@@ -220,8 +233,10 @@ GTP](http://gogui.sourceforge.net/doc/reference-twogtp.html).
 gogui-twogtp -black 'python3 gtp.py --load_file=$LATEST_MODEL' -white 'gogui-display' -size 19 -komi 7.5 -verbose -auto
 ```
 
-Another way to play via GTP is to watch it play against GnuGo, while spectating the games
-```
+Another way to play via GTP is to watch it play against GnuGo, while
+spectating the games:
+
+```shell
 BLACK="gnugo --mode gtp"
 WHITE="python3 gtp.py --load_file=$LATEST_MODEL"
 TWOGTP="gogui-twogtp -black \"$BLACK\" -white \"$WHITE\" -games 10 \
@@ -240,14 +255,26 @@ reinforcement learning on 9x9. These are the basic commands used to produce the
 models and games referenced above.
 
 The commands are
+
  - bootstrap: initializes a random model
  - selfplay: plays games with the latest model, producing data used for training
  - train: trains a new model with the selfplay results from the most recent N
    generations.
 
-Training works via tf.Estimator; a local directory keeps track of training
-progress, and the latest checkpoint is periodically exported to GCS, where it
-gets picked up by selfplay workers.
+Training works via tf.Estimator; a working directory manages checkpoints and
+training logs, and the latest checkpoint is periodically exported to GCS, where
+it gets picked up by selfplay workers.
+
+Configuration for things like "where do debug SGFs get written", "where does
+training data get written", "where do the latest models get published" are
+managed by the helper scripts in the rl_loop directory. Those helper scripts
+execute the same commands as demonstrated below. Configuration for things like
+"what size network is being used?" or "how many readouts during selfplay" can
+be passed in as flags. The mask_flags.py utility helps ensure all parts of the
+pipeline are using the same network configuration.
+
+All local paths in the examples can be replaced with `gs://` GCS paths, and the
+Kubernetes-orchestrated version of the reinforcement learning loop uses GCS.
 
 Bootstrap
 ---------
@@ -258,54 +285,52 @@ selfplay can immediately start playing with this random model.
 
 If these directories don't exist, bootstrap will create them for you.
 
-```bash
+```shell
 export MODEL_NAME=000000-bootstrap
-python3 main.py bootstrap \
-  --working-dir=estimator_working_dir \
-  --model-save-path="gs://$BUCKET_NAME/models/$MODEL_NAME"
+BOARD_SIZE=19 python3 bootstrap.py \
+  --work_dir=estimator_working_dir \
+  --export_path=outputs/models/$MODEL_NAME
 ```
 
 Self-play
 ---------
 
-This command starts self-playing, outputting its raw game data in a
-tensorflow-compatible format as well as in SGF form in the directories
+This command starts self-playing, outputting its raw game data as tf.Examples
+as well as in SGF form in the directories.
 
-```
-gsutil ls gs://$BUCKET_NAME/data/selfplay/$MODEL_NAME/local_worker/*.tfrecord.zz
-gsutil ls gs://$BUCKET_NAME/sgf/$MODEL_NAME/local_worker/*.sgf
-```
 
-```bash
+```shell
 BOARD_SIZE=19 python3 selfplay.py \
-  --load_file=gs://$BUCKET_NAME/models/$MODEL_NAME \
+  --load_file=outputs/models/$MODEL_NAME \
   --num_readouts 10 \
   --verbose 3 \
-  --selfplay_dir=gs://$BUCKET_NAME/data/selfplay/$MODEL_NAME/local_worker \
-  --holdout_dir=gs://$BUCKET_NAME/data/selfplay/$MODEL_NAME/local_worker \
-  --sgf_dir=gs://$BUCKET_NAME/sgf/$MODEL_NAME/local_worker
+  --selfplay_dir=outputs/data/selfplay \
+  --holdout_dir=outputs/data/holdout \
+  --sgf_dir=outputs/sgf
 ```
 
 Training
 --------
 
-This command takes a directory of tfexample files from selfplay and trains a new
-model, starting from the latest model weights in the `estimator_working_dir` parameter.
+This command takes a directory of tf.Example files from selfplay and trains a
+new model, starting from the latest model weights in the `estimator_working_dir`
+parameter.
 
 Run the training job:
-```
-BOARD_SIZE=19 python3 main.py train-dir \
-  gs://$BUCKET_NAME/data/training_chunks \
-  gs://$BUCKET_NAME/models/000001-somename \
-  --model_dir estimator_working_dir
+
+```shell
+BOARD_SIZE=19 python3 train.py \
+  outputs/data/selfplay/* \
+  --work_dir=estimator_working_dir \
+  --export_path=outputs/models/000001-first_generation
 ```
 
-At the end of training, the latest checkpoint will be exported to the directory with the given name.
-Additionally, you can follow along with the training progress with
-TensorBoard - if you point TensorBoard at the estimator working dir, it will
-find the training log files and display them.
+At the end of training, the latest checkpoint will be exported to.
+Additionally, you can follow along with the training progress with TensorBoard.
+If you point TensorBoard at the estimator working directory, it will find the
+training log files and display them.
 
-```
+```shell
 tensorboard --logdir=estimator_working_dir
 ```
 
@@ -318,15 +343,12 @@ command.
 
 ### Validating on holdout data
 
-By default, Minigo will hold out 5% of selfplay games for validation, and write
-them to `gs://$BUCKET_NAME/data/holdout/<model_name>`.  This can be changed by
-adjusting the `holdout_pct` flag on the `selfplay` command.
+By default, MiniGo will hold out 5% of selfplay games for validation. This can
+be changed by adjusting the `holdout_pct` flag on the `selfplay` command.
 
-With this setup, `python rl_loop.py validate --logdir=estimator_working_dir --` will figure out
-the most recent model, grab the holdout data from the fifty models prior to that
-one, and calculate the validation error, writing the tensorboard logs to
-`logdir`.
-
+With this setup, `rl_loop/train_and_validate.py` will validate on the same
+window of games that were used to train, writing TensorBoard logs to the
+estimator working directory.
 
 ### Validating on a different set of data
 
@@ -340,23 +362,25 @@ to
 import preprocessing
 filenames = [generate a list of filenames here]
 for f in filenames:
-     try:
-         preprocessing.make_dataset_from_sgf(f, f.replace(".sgf", ".tfrecord.zz"))
-     except:
-         print(f)
+    try:
+        preprocessing.make_dataset_from_sgf(f, f.replace(".sgf", ".tfrecord.zz"))
+    except:
+        print(f)
 ```
 
 Once you've collected all the files in a directory, producing validation is as
 easy as
 
-```
-BOARD_SIZE=19 python main.py validate path/to/validation/files/ --load_file=$LATEST_MODEL
---logdir=path/to/tb/logs --num-steps=<number of positions to run validation on>
+```shell
+BOARD_SIZE=19 python3 validate.py \
+  validation_files/ \
+  --work_dir=estimator_working_dir \
+  --validation_name=pro_dataset
 ```
 
-the `main.py validate` command will glob all the .tfrecord.zz files under the
-directories given as positional arguments and compute the validation error for
-`num_steps * TRAINING_BATCH_SIZE` positions from those files.
+The validate.py will glob all the .tfrecord.zz files under the
+directories given as positional arguments and compute the validation error
+for the positions from those files.
 
 Running Minigo on a Kubernetes Cluster
 ==============================

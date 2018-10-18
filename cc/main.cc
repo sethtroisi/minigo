@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -37,8 +38,8 @@
 #include "cc/check.h"
 #include "cc/constants.h"
 #include "cc/dual_net/factory.h"
-#include "cc/file/filesystem.h"
 #include "cc/file/path.h"
+#include "cc/file/utils.h"
 #include "cc/gtp_player.h"
 #include "cc/init.h"
 #include "cc/mcts_player.h"
@@ -104,23 +105,24 @@ DEFINE_bool(run_forever, false,
 
 // Inference flags.
 DEFINE_string(model, "",
-              "Path to a minigo model. If remote_inference=false, the model "
-              "should be a serialized GraphDef proto. If "
-              "remote_inference=true, the model should be saved checkpoint.");
+              "Path to a minigo model. The format of the model depends on the "
+              "inferece engine. For engine=tf, the model should be a GraphDef "
+              "proto. For engine=lite, the model should be .tflite "
+              "flatbuffer.");
 DEFINE_string(model_two, "",
               "When running 'eval' mode, provide a path to a second minigo "
               "model, also serialized as a GraphDef proto.");
-DEFINE_int32(parallel_games, 32,
-             "Number of games to play in parallel. For performance reasons, "
-             "parallel_games should equal games_per_inference * 2 because this "
-             "allows the transfer of inference requests & responses to be "
-             "overlapped with model evaluation.");
+DEFINE_int32(parallel_games, 32, "Number of games to play in parallel.");
 
 // Output flags.
 DEFINE_string(output_dir, "",
               "Output directory. If empty, no examples are written.");
 DEFINE_string(holdout_dir, "",
               "Holdout directory. If empty, no examples are written.");
+DEFINE_string(output_bigtable, "",
+              "Output Bigtable specification, of the form: "
+              "project,instance,table. "
+              "If empty, no examples are written to Bigtable.");
 DEFINE_string(sgf_dir, "", "SGF directory. If empty, no SGF is written.");
 DEFINE_double(holdout_pct, 0.03,
               "Fraction of games to hold out for validation.");
@@ -153,25 +155,15 @@ std::string GetOutputDir(absl::Time now, const std::string& root_dir) {
   return file::JoinPath(root_dir, sub_dirs);
 }
 
-void WriteExample(const std::string& output_dir, const std::string& output_name,
-                  const MctsPlayer& player) {
-  MG_CHECK(file::RecursivelyCreateDir(output_dir));
-
-  // Write the TensorFlow examples.
-  std::vector<tensorflow::Example> examples;
-  examples.reserve(player.history().size());
-  DualNet::BoardFeatures features;
-  std::vector<const Position::Stones*> recent_positions;
-  for (const auto& h : player.history()) {
-    h.node->GetMoveHistory(DualNet::kMoveHistory, &recent_positions);
-    DualNet::SetFeatures(recent_positions, h.node->position.to_play(),
-                         &features);
-    examples.push_back(
-        tf_utils::MakeTfExample(features, h.search_pi, player.result()));
+std::string FormatInferenceInfo(
+    const std::vector<MctsPlayer::InferenceInfo>& inferences) {
+  std::vector<std::string> parts;
+  parts.reserve(inferences.size());
+  for (const auto& info : inferences) {
+    parts.push_back(absl::StrCat(info.model, "(", info.first_move, ",",
+                                 info.last_move, ")"));
   }
-
-  auto output_path = file::JoinPath(output_dir, output_name + ".tfrecord.zz");
-  tf_utils::WriteTfExamples(output_path, examples);
+  return absl::StrJoin(parts, ", ");
 }
 
 void WriteSgf(const std::string& output_dir, const std::string& output_name,
@@ -214,10 +206,14 @@ void WriteSgf(const std::string& output_dir, const std::string& output_name,
   options.result = player_b.result_string();
   options.black_name = player_b.name();
   options.white_name = player_w.name();
+  options.game_comment = absl::StrCat(
+      "B inferences: ", FormatInferenceInfo(player_b.inferences()), "\n",
+      "W inferences: ", FormatInferenceInfo(player_w.inferences()));
+
   auto sgf_str = sgf::CreateSgfString(moves, options);
 
   auto output_path = file::JoinPath(output_dir, output_name + ".sgf");
-  TF_CHECK_OK(tf_utils::WriteFile(output_path, sgf_str));
+  MG_CHECK(file::WriteFile(output_path, sgf_str));
 }
 
 void WriteSgf(const std::string& output_dir, const std::string& output_name,
@@ -244,7 +240,7 @@ class SelfPlayer {
   void Run() {
     {
       absl::MutexLock lock(&mutex_);
-      dual_net_factory_ = NewDualNetFactory(FLAGS_model, FLAGS_parallel_games);
+      dual_net_factory_ = NewDualNetFactory(FLAGS_model);
     }
     for (int i = 0; i < FLAGS_parallel_games; ++i) {
       threads_.emplace_back(std::bind(&SelfPlayer::ThreadRun, this, i));
@@ -260,7 +256,7 @@ class SelfPlayer {
   // held. This allows us to safely update the command line arguments from a
   // flag file without causing any race conditions.
   struct GameOptions {
-    void Init(int thread_id) {
+    void Init(int thread_id, Random* rnd) {
       ParseMctsPlayerOptionsFromFlags(&player_options);
       player_options.verbose = thread_id == 0;
       // If an random seed was explicitly specified, make sure we use a
@@ -268,6 +264,7 @@ class SelfPlayer {
       if (player_options.random_seed != 0) {
         player_options.random_seed += 1299283 * thread_id;
       }
+      player_options.resign_enabled = (*rnd)() >= FLAGS_disable_resign_pct;
 
       run_forever = FLAGS_run_forever;
       holdout_pct = FLAGS_holdout_pct;
@@ -284,12 +281,70 @@ class SelfPlayer {
     std::string sgf_dir;
   };
 
+  void LogEndGameInfo(MctsPlayer* player, absl::Duration game_time) {
+    std::cout << player->result_string() << std::endl;
+    std::cout << "Playing game: " << absl::ToDoubleSeconds(game_time)
+              << std::endl;
+    std::cout << "Played moves: " << player->root()->position.n() << std::endl;
+
+    const auto& history = player->history();
+    if (history.empty()) {
+      return;
+    }
+
+    // Find the move at which the game looked the bleakest from the perspective
+    // of the winner.
+    float result = player->result();
+    float bleakest_eval = history[0].node->Q() * result;
+    float bleakest_move = 0;
+    for (size_t i = 1; i < history.size(); ++i) {
+      float eval = history[i].node->Q() * result;
+      if (eval < bleakest_eval) {
+        bleakest_eval = eval;
+        bleakest_move = i;
+      }
+    }
+    if (!player->options().resign_enabled) {
+      std::cout << "Bleakest eval: move=" << bleakest_move
+                << " Q=" << history[bleakest_move].node->Q() << std::endl;
+    }
+
+    // If resignation is disabled, check to see if the first time Q_perspective
+    // crossed the resign_threshold the eventual winner of the game would have
+    // resigned. Note that we only check for the first resignation: if the
+    // winner would have incorrectly resigned AFTER the loser would have
+    // resigned on an earlier move, this is not counted as a bad resignation for
+    // the winner (since the game would have ended after the loser's initial
+    // resignation).
+    if (!player->options().resign_enabled) {
+      for (size_t i = 0; i < history.size(); ++i) {
+        if (history[i].node->Q_perspective() <
+            player->options().resign_threshold) {
+          if ((history[i].node->Q() < 0) != (result < 0)) {
+            std::cout << "Bad resign: move=" << i
+                      << " Q=" << history[i].node->Q() << std::endl;
+          }
+          break;
+        }
+      }
+    }
+  }
+
   void ThreadRun(int thread_id) {
     // Only print the board using ANSI colors if stderr is sent to the
     // terminal.
     const bool use_ansi_colors = isatty(fileno(stderr));
 
     GameOptions game_options;
+    std::vector<std::string> bigtable_spec =
+        absl::StrSplit(FLAGS_output_bigtable, ',');
+    bool use_bigtable = bigtable_spec.size() == 3;
+    if (!FLAGS_output_bigtable.empty() && !use_bigtable) {
+      MG_FATAL()
+          << "Bigtable output must be of the form: project,instance,table";
+      return;
+    }
+
     do {
       std::unique_ptr<MctsPlayer> player;
 
@@ -298,10 +353,8 @@ class SelfPlayer {
         auto old_model = FLAGS_model;
         MaybeReloadFlags();
         MG_CHECK(old_model == FLAGS_model)
-            << "Manually changing the model during selfplay is not supported. "
-               "Use --checkpoint_dir and --engine=remote to perform inference "
-               "using the most recent checkpoint from training.";
-        game_options.Init(thread_id);
+            << "Manually changing the model during selfplay is not supported.";
+        game_options.Init(thread_id, &rnd_);
         player = absl::make_unique<MctsPlayer>(dual_net_factory_->New(),
                                                game_options.player_options);
       }
@@ -311,14 +364,22 @@ class SelfPlayer {
       while (!player->game_over()) {
         auto move = player->SuggestMove();
         if (player->options().verbose) {
+          const auto& position = player->root()->position;
           std::cerr << player->root()->position.ToPrettyString(use_ansi_colors);
+          std::cerr << "Move: " << position.n()
+                    << " Captures X: " << position.num_captures()[0]
+                    << " O: " << position.num_captures()[1] << std::endl;
           std::cerr << player->root()->Describe() << std::endl;
         }
         player->PlayMove(move);
       }
-      std::cerr << player->result_string() << std::endl;
-      std::cout << "Playing game: "
-                << absl::ToDoubleSeconds(absl::Now() - start_time) << std::endl;
+
+      {
+        // Log the end game info with the shared mutex held to prevent the
+        // outputs from multiple threads being interleaved.
+        absl::MutexLock lock(&mutex_);
+        LogEndGameInfo(player.get(), absl::Now() - start_time);
+      }
 
       // Write the outputs.
       auto now = absl::Now();
@@ -332,7 +393,15 @@ class SelfPlayer {
       auto example_dir =
           is_holdout ? game_options.holdout_dir : game_options.output_dir;
       if (!example_dir.empty()) {
-        WriteExample(GetOutputDir(now, example_dir), output_name, *player);
+        tf_utils::WriteGameExamples(GetOutputDir(now, example_dir), output_name,
+                                    *player);
+      }
+      if (use_bigtable) {
+        const auto& gcp_project_name = bigtable_spec[0];
+        const auto& instance_name = bigtable_spec[1];
+        const auto& table_name = bigtable_spec[2];
+        tf_utils::WriteGameExamples(gcp_project_name, instance_name, table_name,
+                                    *player);
       }
 
       if (!game_options.sgf_dir.empty()) {
@@ -353,16 +422,24 @@ class SelfPlayer {
       return;
     }
     uint64_t new_flags_timestamp;
-    TF_CHECK_OK(tf_utils::GetModTime(FLAGS_flags_path, &new_flags_timestamp));
+    MG_CHECK(file::GetModTime(FLAGS_flags_path, &new_flags_timestamp));
+    std::cerr << "flagfile:" << FLAGS_flags_path
+              << " old_ts:" << absl::FromUnixMicros(flags_timestamp_)
+              << " new_ts:" << absl::FromUnixMicros(new_flags_timestamp);
     if (new_flags_timestamp == flags_timestamp_) {
+      std::cerr << " skipping" << std::endl;
       return;
     }
 
     flags_timestamp_ = new_flags_timestamp;
     std::string contents;
-    TF_CHECK_OK(tf_utils::ReadFile(FLAGS_flags_path, &contents));
+    MG_CHECK(file::ReadFile(FLAGS_flags_path, &contents));
 
-    for (auto line : absl::StrSplit(contents, '\n')) {
+    std::vector<std::string> lines =
+        absl::StrSplit(contents, '\n', absl::SkipEmpty());
+    std::cerr << " loaded flags:" << absl::StrJoin(lines, " ") << std::endl;
+
+    for (absl::string_view line : lines) {
       std::pair<absl::string_view, absl::string_view> line_comment =
           absl::StrSplit(line, absl::MaxSplits('#', 1));
       line = absl::StripAsciiWhitespace(line_comment.first);
@@ -400,11 +477,11 @@ void Eval() {
   options.random_symmetry = true;
 
   options.name = std::string(file::Stem(FLAGS_model));
-  auto black_factory = NewDualNetFactory(FLAGS_model, 1);
+  auto black_factory = NewDualNetFactory(FLAGS_model);
   auto black = absl::make_unique<MctsPlayer>(black_factory->New(), options);
 
   options.name = std::string(file::Stem(FLAGS_model_two));
-  auto white_factory = NewDualNetFactory(FLAGS_model_two, 1);
+  auto white_factory = NewDualNetFactory(FLAGS_model_two);
   auto white = absl::make_unique<MctsPlayer>(white_factory->New(), options);
 
   auto* player = black.get();
@@ -436,13 +513,12 @@ void Gtp() {
   options.name = absl::StrCat("minigo-", file::Basename(FLAGS_model));
   options.ponder_limit = FLAGS_ponder_limit;
   options.courtesy_pass = FLAGS_courtesy_pass;
-  auto dual_net_factory = NewDualNetFactory(FLAGS_model, 1);
+  auto dual_net_factory = NewDualNetFactory(FLAGS_model);
   auto player = absl::make_unique<GtpPlayer>(dual_net_factory->New(), options);
   player->Run();
 }
 
 }  // namespace
-
 }  // namespace minigo
 
 int main(int argc, char* argv[]) {

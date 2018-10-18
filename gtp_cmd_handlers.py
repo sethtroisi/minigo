@@ -219,14 +219,17 @@ class MiniguiBasicCmdHandler(BasicCmdHandler):
 
         self._last_report_time = None
         self._report_search_interval = 0.0
+        self._last_pv = None
 
     def cmd_echo(self, *args):
         return " ".join(args)
 
     def cmd_info(self):
-        return "num_readouts: %d report_search_interval: %.1f n: %d" % (
-            self._player.get_num_readouts(),
-            self._report_search_interval * 1000, go.N)
+        return ("num_readouts: %d report_search_interval: %.1f n: %d "
+                "resign_threshold: %f" % (
+                    self._player.get_num_readouts(),
+                    self._report_search_interval * 1000, go.N,
+                    self._player.resign_threshold))
 
     def cmd_readouts(self, readouts: int):
         readouts = max(8, readouts)
@@ -258,17 +261,15 @@ class MiniguiBasicCmdHandler(BasicCmdHandler):
                 else:
                     board.append(".")
         msg["board"] = "".join(board)
-        msg["toPlay"] = "Black" if position.to_play == 1 else "White"
         if position.recent:
             msg["lastMove"] = coords.to_kgs(position.recent[-1].move)
         else:
             msg["lastMove"] = None
-        msg["n"] = position.n
-        if root.parent and root.parent.parent:
-            msg["q"] = root.parent.Q
-        else:
-            msg["q"] = 0
-        dbg("mg-gamestate:%s", json.dumps(msg, sort_keys=True))
+        msg["toPlay"] = "B" if position.to_play == 1 else "W"
+        msg["moveNum"] = position.n
+        msg["q"] = root.parent.Q if root.parent and root.parent.parent else 0
+        msg["gameOver"] = position.is_game_over()
+        dbg("mg-gamestate:%s" % json.dumps(msg, sort_keys=True))
 
     def cmd_genmove(self, color=None):
         start = time.time()
@@ -276,15 +277,12 @@ class MiniguiBasicCmdHandler(BasicCmdHandler):
         duration = time.time() - start
 
         root = self._player.get_root()
-        dbg("")
-        dbg(root.describe())
         if result != "resign":
             dbg("")
             dbg(root.position.__str__(colors=False))
-            dbg("%d readouts, %.3f s/100. (%.2f sec)",
+            dbg("%d readouts, %.3f s/100. (%.2f sec)" % (
                 self._player.get_num_readouts(),
-                duration / self._player.get_num_readouts() * 100.0,
-                duration)
+                duration / self._player.get_num_readouts() * 100.0, duration))
             dbg("")
             if root.is_done():
                 self._player.set_result(
@@ -312,23 +310,34 @@ class MiniguiBasicCmdHandler(BasicCmdHandler):
         Args:
           leaves: list of leaf MCTSNodes returned by tree_search().
          """
+
         root = self._player.get_root()
+
+        msg = {
+            "moveNum": root.position.n,
+            "toPlay": "B" if root.position.to_play == go.BLACK else "W",
+        }
+
         if leaves:
             path = []
             leaf = leaves[0]
             while leaf != root:
                 path.append(leaf.fmove)
                 leaf = leaf.parent
-            path = [coords.to_kgs(coords.from_flat(m)) for m in reversed(path)]
-            dbg("mg-search:%s", " ".join(path))
+            msg["search"] = [coords.to_kgs(coords.from_flat(m))
+                             for m in reversed(path)]
+        else:
+            msg["search"] = []
 
-        q = root.child_Q - root.Q
-        q = ['%.3f' % x for x in q]
-        dbg("mg-q:%s", " ".join(q))
+        dq = root.child_Q - root.Q
+        msg["dq"] = [int(round(x * 100)) for x in dq]
 
-        n = ['%d' % x for x in root.child_N]
-        dbg("mg-n:%s", " ".join(n))
+        msg["n"] = [int(n) for n in root.child_N]
 
         nodes = root.most_visited_path_nodes()
-        path = [coords.to_kgs(coords.from_flat(m.fmove)) for m in nodes]
-        dbg("mg-pv:%s", " ".join(path))
+        pv = [coords.to_kgs(coords.from_flat(m.fmove)) for m in nodes]
+        if pv != self._last_pv:
+            msg["pv"] = pv
+            self._last_pv = pv
+
+        dbg("mg-search:%s" % json.dumps(msg, sort_keys=True))

@@ -46,6 +46,13 @@ class MctsPlayer {
     bool soft_pick = true;
     bool random_symmetry = true;
     float resign_threshold = -0.95;
+
+    // We use a separate resign_enabled flag instead of setting the
+    // resign_threshold to -1 for games where resignation is diabled. This
+    // enables us to report games where the eventual winner would have
+    // incorrectly resigned early, had resignations been enabled.
+    bool resign_enabled = true;
+
     // TODO(tommadams): rename batch_size to virtual_losses.
     int batch_size = 8;
     float komi = kDefaultKomi;
@@ -82,6 +89,28 @@ class MctsPlayer {
     Coord c = Coord::kPass;
     std::string comment;
     const MctsNode* node = nullptr;
+  };
+
+  // State that tracks which model is used for each inference.
+  struct InferenceInfo {
+    InferenceInfo(std::string model, int first_move)
+        : model(std::move(model)),
+          first_move(first_move),
+          last_move(first_move) {}
+
+    // Model name returned from RunMany.
+    std::string model;
+
+    // Total number of times a model was used for inference.
+    size_t total_count = 0;
+
+    // The first move a model was used for inference.
+    int first_move = 0;
+
+    // The last move a model was used for inference.
+    // This needs to be tracked separately from first_move because the common
+    // case is that the model changes change part-way through a tree search.
+    int last_move = 0;
   };
 
   // If position is non-null, the player will be initilized with that board
@@ -131,6 +160,7 @@ class MctsPlayer {
   const Options& options() const { return options_; }
   const std::vector<History>& history() const { return history_; }
   const std::string& name() const { return options_.name; }
+  const std::vector<InferenceInfo>& inferences() const { return inferences_; }
 
   // These methods are protected to facilitate direct testing.
  protected:
@@ -140,7 +170,7 @@ class MctsPlayer {
 
   // Returns the list of nodes that TreeSearch performed inference on.
   // The contents of the returned Span is valid until the next call TreeSearch.
-  virtual absl::Span<MctsNode* const> TreeSearch(int batch_size);
+  virtual absl::Span<MctsNode* const> TreeSearch();
 
   // Returns the root of the game tree.
   MctsNode* game_root() { return &game_root_; }
@@ -179,27 +209,6 @@ class MctsPlayer {
 
   std::vector<History> history_;
 
-  // State that tracks which model is used for each inference.
-  struct InferenceInfo {
-    InferenceInfo(std::string model, int first_move)
-        : model(std::move(model)),
-          first_move(first_move),
-          last_move(first_move) {}
-
-    // Model name returned from RunMany.
-    std::string model;
-
-    // Total number of times a model was used for inference.
-    size_t total_count = 0;
-
-    // The first move a model was used for inference.
-    int first_move = 0;
-
-    // The last move a model was used for inference.
-    // This needs to be tracked separately from first_move because the common
-    // case is that the model changes change part-way through a tree search.
-    int last_move = 0;
-  };
   std::string model_;
   std::vector<InferenceInfo> inferences_;
 

@@ -66,4 +66,8 @@ void DualNet::SetFeatures(absl::Span<const Position::Stones* const> history,
 
 DualNet::~DualNet() = default;
 
+DualNet::InputLayout DualNet::GetInputLayout() const {
+  return InputLayout::kNHWC;
+}
+
 }  // namespace minigo

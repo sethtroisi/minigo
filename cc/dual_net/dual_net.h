@@ -52,6 +52,11 @@ class DualNet {
   using StoneFeatures = std::array<float, kNumStoneFeatures>;
   using BoardFeatures = std::array<float, kNumBoardFeatures>;
 
+  enum class InputLayout {
+    kNHWC,
+    kNCHW,
+  };
+
   // Generates the board features from the history of recent moves, where
   // history[0] is the current board position, and history[i] is the board
   // position from i moves ago.
@@ -69,17 +74,10 @@ class DualNet {
   virtual ~DualNet();
 
   // Runs inference on a batch of input features.
-  // If `model` is non-null, it will be set with the name of the model used for
-  // the inference.
-  virtual void RunMany(absl::Span<const BoardFeatures> features,
-                       absl::Span<Output> outputs, std::string* model) = 0;
+  virtual void RunMany(std::vector<const BoardFeatures*> features,
+                       std::vector<Output*> outputs, std::string* model) = 0;
 
-  // Runs inference on features from a single position.
-  Output Run(const BoardFeatures features, std::string* model) {
-    Output output;
-    RunMany({&features, 1}, {&output, 1}, model);
-    return output;
-  }
+  virtual InputLayout GetInputLayout() const;
 };
 
 }  // namespace minigo
