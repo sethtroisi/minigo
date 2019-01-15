@@ -21,13 +21,14 @@ import kubernetes
 import yaml
 import json
 import os
+import re
 import time
 from rl_loop import fsdb
 
 from ratings import ratings
 
 
-def launch_eval_job(m1_path, m2_path, job_name, bucket_name, completions=5):
+def launch_eval_job(m1_path, m2_path, job_name, bucket_name, completions=2):
     """Launches an evaluator job.
     m1_path, m2_path: full gs:// paths to the .pb files to match up
     job_name: string, appended to the container, used to differentiate the job
@@ -39,6 +40,14 @@ def launch_eval_job(m1_path, m2_path, job_name, bucket_name, completions=5):
         print("Provide all of m1_path, m2_path, job_name, and bucket_name "
               "params")
         return
+
+    def isGsPath(path):
+        return path.startswith('gs://')
+
+    assert isGsPath(m1_path), 'm1_path: ' + m1_path + ' must start gs://'
+    assert isGsPath(m2_path), 'm2_path: ' + m2_path + ' must start gs://'
+    assert not isGsPath(bucket_name), 'bucket_name must not be gs:// path'
+
     api_instance = get_api()
 
     raw_job_conf = open("cluster/evaluator/cc-evaluator.yaml").read()
@@ -62,8 +71,8 @@ def launch_eval_job(m1_path, m2_path, job_name, bucket_name, completions=5):
     job_conf = yaml.load(env_job_conf)
     job_conf['spec']['completions'] = completions
 
-    resp_wb = api_instance.create_namespaced_job('default', body=job_conf)
-    return job_conf, resp_bw, resp_wb
+    #resp_wb = api_instance.create_namespaced_job('default', body=job_conf)
+    #return job_conf, resp_bw, resp_wb
 
 
 def same_run_eval(black_num=0, white_num=0):
@@ -81,8 +90,34 @@ def same_run_eval(black_num=0, white_num=0):
 
     return launch_eval_job(b_model_path + ".pb",
                            w_model_path + ".pb",
-                           "{:d}-{:d}".format(black_num, white_num),
+                           "{}-{}".format(black_num, white_num),
                            flags.FLAGS.bucket_name)
+
+
+def cross_run_eval(run_a, model_a, run_b, model_b):
+    """Shorthand to spawn a job matching up two models from the different run,
+    identified by their bucket and model number """
+    assert len(run_a) in (2,3) and len(run_b) in (2,3), (run_a, run_b)
+    model_re = re.compile(r'^[0-9]{6}-[a-z-]*$')
+    assert model_re.match(model_a), model_a
+    assert model_re.match(model_b), model_b
+
+    num_a = int(model_a.split('-')[0])
+    num_b = int(model_b.split('-')[0])
+    assert 0 <= num_a <= 1000, num_a
+    assert 0 <= num_b <= 1000, num_b
+
+    PROJECT = os.environ.get("PROJECT")
+    bucket_a = "gs://{}-minigo-{}-19".format(PROJECT, run_a)
+    bucket_b = "gs://{}-minigo-{}-19".format(PROJECT, run_b)
+
+    path_a = os.path.join(bucket_a, 'models', model_a + ".pb")
+    path_b = os.path.join(bucket_b, 'models', model_b + ".pb")
+
+    tag = '{}-{}-vs-{}-{}'.format(run_a, num_a, run_b, num_b)
+
+    cross_eval_bucket = PROJECT + '-minigo-cross-evals'
+    return launch_eval_job(path_a, path_b, tag, cross_eval_bucket)
 
 
 def _append_pairs(new_pairs, dry_run):
@@ -186,6 +221,61 @@ def zoo_loop(sgf_dir=None, max_jobs=40):
         raise
 
 
+def cross_eval_matchmaker_loop(sgf_dir=None, max_jobs=20):
+    """Manages creating and cleaning up cross bucket evaluation jobs.
+
+    sgf_dir -- the directory where sgf eval games should be used for computing
+      ratings.
+    max_jobs -- the maximum number of concurrent jobs.  jobs * completions * 2
+      should be around 200 to keep kubernetes from losing track of completions
+    """
+    desired_pairs = restore_pairs() or []
+
+    if sgf_dir:
+        sgf_dir = os.path.abspath(sgf_dir)
+
+    api_instance = get_api()
+    try:
+        while True:
+            cleanup(api_instance)
+            r = api_instance.list_job_for_all_namespaces()
+            if len(r.items) >= max_jobs:
+                print("{}\t{} jobs outstanding. ({} to be scheduled)".format(
+                      time.strftime("%I:%M:%S %p"),
+                      len(r.items), len(desired_pairs)))
+                time.sleep(60)
+            else:
+                if len(desired_pairs) == 0:
+                    if sgf_dir:
+                        print("Out of pairs!  Syncing new eval games...")
+                        ratings.sync(sgf_dir)
+                        print("Updating ratings and getting suggestions...")
+                        #get_cross_eval_pairs()
+                        #add_uncertain_pairs()
+                        #desired_pairs = restore_pairs() or []
+                        print("Got {} new pairs".format(len(desired_pairs)))
+                        print(ratings.describe())
+                    else:
+                        print("Out of pairs!  Sleeping")
+                        time.sleep(300)
+                        continue
+
+                next_pair = desired_pairs.pop()  # take our pair off
+                print("Enqueuing:", next_pair)
+                try:
+                    cross_run_eval(*next_pair)
+                except:
+                    desired_pairs.append(next_pair)
+                    raise
+                save_pairs(sorted(desired_pairs))
+                time.sleep(6)
+    except:
+        print("Unfinished pairs:")
+        print(sorted(desired_pairs))
+        save_pairs(sorted(desired_pairs))
+        raise
+
+
 def restore_pairs():
     with open('pairlist.json') as f:
         pairs = json.loads(f.read())
@@ -248,6 +338,7 @@ if __name__ == '__main__':
     fire.Fire({
         'zoo_loop': zoo_loop,
         'same_run_eval': same_run_eval,
+        'cross_run_eval': cross_run_eval,
         'cleanup': cleanup,
         'add_top_pairs': add_top_pairs,
         'launch_eval_job': launch_eval_job,

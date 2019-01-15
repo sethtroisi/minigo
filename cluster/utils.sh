@@ -141,6 +141,7 @@ function create_cbt_table() {
     fi
   fi
   if ! ( create_cbt_family tfexample &&
+         create_cbt_family eval &&
          create_cbt_family metadata ); then
     return 1
   fi
