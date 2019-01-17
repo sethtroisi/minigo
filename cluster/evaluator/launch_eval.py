@@ -122,7 +122,7 @@ def cross_run_eval(run_a, model_a, run_b, model_b):
     tag = '{}-{}-vs-{}-{}'.format(run_a, num_a, run_b, num_b)
 
     cross_eval_bucket = PROJECT + '-minigo-cross-evals'
-    return launch_eval_job(path_a, path_b, tag, cross_eval_bucket, 2)
+    return launch_eval_job(path_a, path_b, tag, cross_eval_bucket, 3)
 
 
 def _append_pairs(new_pairs, dry_run):
@@ -157,6 +157,8 @@ def get_cross_eval_pairs():
     game_counts = Counter(ratings.wins_subset(fsdb.models_dir()))
     print ("Found", sum(game_counts.values()), "games")
 
+    existing_pairs, previous_pairs = restore_pairs()
+
     # priority is roughly related to expected gain of information
     pairs = []
     for run_a, model_a in all_models:
@@ -179,17 +181,22 @@ def get_cross_eval_pairs():
             power = 2.5
             priority = variance  / (1 + games) ** power
 
-            pairs.append((priority, (run_a, model_a, run_b, model_b)))
+            pair = [run_a, model_a, run_b, model_b]
+            if pair in previous_pairs:
+                continue
+            pairs.append((priority, pair))
 
     pairs.sort(reverse=True)
     pairs = pairs[:10]
     for priority, pair in pairs:
         print ("Consider priority:", priority, "pair:", pair)
 
-    existing_pairs = restore_pairs() or []
-    pairs = [pair for _, pair in pairs if pair not in existing_pairs]
+    new_pairs = [pair for _, pair in pairs if pair not in existing_pairs]
 
-    _append_pairs(pairs, dry_run=False)
+    existing_pairs += new_pairs
+    print("Adding {} new pairs, queue has {} pairs".format(
+        len(new_pairs), len(existing_pairs)))
+    save_pairs((existing_pairs, previous_pairs))
 
 
 
@@ -281,7 +288,7 @@ def zoo_loop(sgf_dir=None, max_jobs=40):
         raise
 
 
-def cross_run_eval_matchmaker_loop(sgf_dir, max_jobs=20):
+def cross_run_eval_matchmaker_loop(sgf_dir, max_jobs=40):
     """Manages creating and cleaning up cross bucket evaluation jobs.
 
     sgf_dir -- the directory where sgf eval games should be used for computing
@@ -289,7 +296,7 @@ def cross_run_eval_matchmaker_loop(sgf_dir, max_jobs=20):
     max_jobs -- the maximum number of concurrent jobs.  jobs * completions * 2
       should be around 200 to keep kubernetes from losing track of completions
     """
-    desired_pairs = restore_pairs() or []
+    desired_pairs, existing_pairs = restore_pairs()
 
     sgf_dir = os.path.abspath(sgf_dir)
 
@@ -310,7 +317,7 @@ def cross_run_eval_matchmaker_loop(sgf_dir, max_jobs=20):
                         ratings.sync(sgf_dir)
                         print("Updating ratings and getting suggestions...")
                         get_cross_eval_pairs()
-                        desired_pairs = restore_pairs() or []
+                        desired_pairs, existing_pairs = restore_pairs()
                         print("Got {} new pairs".format(len(desired_pairs)))
                     else:
                         print("Out of pairs!  Sleeping")
@@ -318,19 +325,17 @@ def cross_run_eval_matchmaker_loop(sgf_dir, max_jobs=20):
                         continue
 
                 next_pair = desired_pairs.pop()  # take our pair off
-                print("Queue", len(desired_pairs), "items")
+                existing_pairs.append(next_pair)
+                print("Queue", len(desired_pairs), "items", len(existing_pairs), "previous")
                 print("Enqueuing:", next_pair)
-                try:
-                    cross_run_eval(*next_pair)
-                except:
-                    desired_pairs.append(next_pair)
-                    raise
-                save_pairs(sorted(desired_pairs))
+                cross_run_eval(*next_pair)
+                save_pairs((desired_pairs, existing_pairs[-80:]))
                 time.sleep(6)
     except:
+        print("Finished pairs:", len(existing_pairs))
         print("Unfinished pairs:")
-        print(sorted(desired_pairs))
-        save_pairs(sorted(desired_pairs))
+        print(desired_pairs)
+        save_pairs((desired_pairs, existing_pairs))
         raise
 
 def read_json(filename):
