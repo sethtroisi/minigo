@@ -15,20 +15,22 @@
 import sys
 sys.path.insert(0, '.')
 
-import fire
-from absl import flags
-import kubernetes
-import yaml
 import json
 import os
 import re
 import time
-from rl_loop import fsdb
+from collections import Counter
 
+import fire
+from absl import flags
+import kubernetes
+import yaml
+
+from rl_loop import fsdb
 from ratings import ratings
 
 
-def launch_eval_job(m1_path, m2_path, job_name, bucket_name, completions=2):
+def launch_eval_job(m1_path, m2_path, job_name, bucket_name, completions=5):
     """Launches an evaluator job.
     m1_path, m2_path: full gs:// paths to the .pb files to match up
     job_name: string, appended to the container, used to differentiate the job
@@ -71,8 +73,8 @@ def launch_eval_job(m1_path, m2_path, job_name, bucket_name, completions=2):
     job_conf = yaml.load(env_job_conf)
     job_conf['spec']['completions'] = completions
 
-    #resp_wb = api_instance.create_namespaced_job('default', body=job_conf)
-    #return job_conf, resp_bw, resp_wb
+    resp_wb = api_instance.create_namespaced_job('default', body=job_conf)
+    return job_conf, resp_bw, resp_wb
 
 
 def same_run_eval(black_num=0, white_num=0):
@@ -97,6 +99,9 @@ def same_run_eval(black_num=0, white_num=0):
 def cross_run_eval(run_a, model_a, run_b, model_b):
     """Shorthand to spawn a job matching up two models from the different run,
     identified by their bucket and model number """
+
+    run_a = run_a.replace('-19x19', '')
+    run_b = run_b.replace('-19x19', '')
     assert len(run_a) in (2,3) and len(run_b) in (2,3), (run_a, run_b)
     model_re = re.compile(r'^[0-9]{6}-[a-z-]*$')
     assert model_re.match(model_a), model_a
@@ -117,7 +122,7 @@ def cross_run_eval(run_a, model_a, run_b, model_b):
     tag = '{}-{}-vs-{}-{}'.format(run_a, num_a, run_b, num_b)
 
     cross_eval_bucket = PROJECT + '-minigo-cross-evals'
-    return launch_eval_job(path_a, path_b, tag, cross_eval_bucket)
+    return launch_eval_job(path_a, path_b, tag, cross_eval_bucket, 2)
 
 
 def _append_pairs(new_pairs, dry_run):
@@ -131,6 +136,61 @@ def _append_pairs(new_pairs, dry_run):
 def add_uncertain_pairs(dry_run=False):
     new_pairs = ratings.suggest_pairs()
     _append_pairs(new_pairs, dry_run)
+
+
+
+def get_cross_eval_pairs():
+    #def cross_run_eval(run_a, model_a, run_b, model_b):
+
+    all_models = read_cross_run_models()
+    print(len(all_models), "cross eval models")
+
+    # key in ratings.db
+    model_ids = {m[1]: ratings.model_id(m[1]) for m in all_models}
+    assert len(model_ids) == len(all_models), "Duplicate model name!"
+#    assert len(model_ids) == len(set(model_ids.values())), "Duplicate row!"
+
+    raw_scores = ratings.compute_ratings()
+    r = {ratings.model_name_for(k): v[0] for k, v in raw_scores.items()}
+    print (len(r), "ratings")
+
+    game_counts = Counter(ratings.wins_subset(fsdb.models_dir()))
+    print ("Found", sum(game_counts.values()), "games")
+
+    # priority is roughly related to expected gain of information
+    pairs = []
+    for run_a, model_a in all_models:
+        for run_b, model_b in all_models:
+            if (run_a, model_a) >= (run_b, model_b):
+                continue
+
+            # if not present use model_num as rating which helps sparse rating.
+            r_a = r.get(model_a, int(model_a.split('-')[0]))
+            r_b = r.get(model_b, int(model_b.split('-')[0]))
+
+            win_prob = 1 / (1 + 10 ** (-(r_a - r_b)/400))
+            variance = win_prob * (1 - win_prob)
+
+            # count of head to head encounters
+            games = (game_counts[(model_ids[model_a], model_ids[model_b])] +
+                     game_counts[(model_ids[model_b], model_ids[model_a])])
+
+            # Controls how much to explore unique pairs verus equal strength.
+            power = 2.5
+            priority = variance  / (1 + games) ** power
+
+            pairs.append((priority, (run_a, model_a, run_b, model_b)))
+
+    pairs.sort(reverse=True)
+    pairs = pairs[:10]
+    for priority, pair in pairs:
+        print ("Consider priority:", priority, "pair:", pair)
+
+    existing_pairs = restore_pairs() or []
+    pairs = [pair for _, pair in pairs if pair not in existing_pairs]
+
+    _append_pairs(pairs, dry_run=False)
+
 
 
 def add_top_pairs(dry_run=False):
@@ -221,7 +281,7 @@ def zoo_loop(sgf_dir=None, max_jobs=40):
         raise
 
 
-def cross_eval_matchmaker_loop(sgf_dir=None, max_jobs=20):
+def cross_run_eval_matchmaker_loop(sgf_dir, max_jobs=20):
     """Manages creating and cleaning up cross bucket evaluation jobs.
 
     sgf_dir -- the directory where sgf eval games should be used for computing
@@ -231,8 +291,7 @@ def cross_eval_matchmaker_loop(sgf_dir=None, max_jobs=20):
     """
     desired_pairs = restore_pairs() or []
 
-    if sgf_dir:
-        sgf_dir = os.path.abspath(sgf_dir)
+    sgf_dir = os.path.abspath(sgf_dir)
 
     api_instance = get_api()
     try:
@@ -250,17 +309,16 @@ def cross_eval_matchmaker_loop(sgf_dir=None, max_jobs=20):
                         print("Out of pairs!  Syncing new eval games...")
                         ratings.sync(sgf_dir)
                         print("Updating ratings and getting suggestions...")
-                        #get_cross_eval_pairs()
-                        #add_uncertain_pairs()
-                        #desired_pairs = restore_pairs() or []
+                        get_cross_eval_pairs()
+                        desired_pairs = restore_pairs() or []
                         print("Got {} new pairs".format(len(desired_pairs)))
-                        print(ratings.describe())
                     else:
                         print("Out of pairs!  Sleeping")
                         time.sleep(300)
                         continue
 
                 next_pair = desired_pairs.pop()  # take our pair off
+                print("Queue", len(desired_pairs), "items")
                 print("Enqueuing:", next_pair)
                 try:
                     cross_run_eval(*next_pair)
@@ -275,28 +333,28 @@ def cross_eval_matchmaker_loop(sgf_dir=None, max_jobs=20):
         save_pairs(sorted(desired_pairs))
         raise
 
+def read_json(filename):
+    with open(filename) as f:
+        return json.loads(f.read())
+
+def write_json(filename, data):
+    with open(filename, 'w') as f:
+        json.dump(data, f)
 
 def restore_pairs():
-    with open('pairlist.json') as f:
-        pairs = json.loads(f.read())
-    return pairs
-
+    return read_json('pairlist.json')
 
 def save_pairs(pairs):
-    with open('pairlist.json', 'w') as f:
-        json.dump(pairs, f)
-
-
-def save_last_model(model):
-    with open('last_model.json', 'w') as f:
-        json.dump(model, f)
-
+    write_json('pairlist.json', pairs)
 
 def restore_last_model():
-    with open('last_model.json') as f:
-        last_model = json.loads(f.read())
-    return last_model
+    return read_json('last_model.json')
 
+def save_last_model(model):
+    write_json('last_model.json', model)
+
+def read_cross_run_models():
+    return read_json('oneoffs/cross_eval_models.json')
 
 def get_api():
     kubernetes.config.load_kube_config(persist_config=True)
@@ -337,6 +395,7 @@ if __name__ == '__main__':
     remaining_argv = flags.FLAGS(sys.argv, known_only=True)
     fire.Fire({
         'zoo_loop': zoo_loop,
+        'cross_run_eval_matchmaker_loop': cross_run_eval_matchmaker_loop,
         'same_run_eval': same_run_eval,
         'cross_run_eval': cross_run_eval,
         'cleanup': cleanup,

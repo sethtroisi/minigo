@@ -49,7 +49,6 @@ def maybe_insert_model(db, bucket, name, num):
                       0, 0, 0,
                       0, 0, 0)""", [name, num, bucket])
 
-
 def model_id(name_or_num):
     db = sqlite3.connect("ratings.db")
     bucket = fsdb.models_dir()
@@ -66,8 +65,15 @@ def model_num_for(model_id):
     except:
         print("No model found for id: {}".format(model_id))
         raise
-        return None
 
+def model_name_for(model_id):
+    try:
+        db = sqlite3.connect("ratings.db")
+        return db.execute("select model_name from models where id = ?",
+                          (model_id,)).fetchone()[0]
+    except:
+        print("No model found for id: {}".format(model_id))
+        raise
 
 def rowid_for(db, bucket, name):
     try:
@@ -75,7 +81,7 @@ def rowid_for(db, bucket, name):
                           "and model_name = ?",
                           [bucket, name]).fetchone()[0]
     except:
-        print("No row found for bucket: {} name: {}".format(bucket, name))
+        #print("No row found for bucket: {} name: {}".format(bucket, name))
         return None
 
 
@@ -108,10 +114,6 @@ def import_files(files, bucket=None):
 
             m_num_w = re.match(MODEL_REGEX, pw).group(1)
             m_num_b = re.match(MODEL_REGEX, pb).group(1)
-            # v10 and v9 have the same model and name for 588, so cross eval
-            # games played with this model should be ignored.
-            if m_num_w == '000588' or m_num_b == '000588':
-                continue
 
             try:
                 # create models or ignore.
@@ -248,7 +250,7 @@ def suggest_pairs(top_n=10, per_n=3):
     bucket_ids.sort()
     data = [d for d in data if d[0] in bucket_ids and d[1] in bucket_ids]
 
-    ratings = [(model_num_for(k), v[0], v[1]) for k, v in compute_ratings(data).items()]
+    ratings = [(model_num_for(k),) + v for k, v in compute_ratings(data).items()]
     ratings.sort()
     ratings = ratings[100:]  # Filter off the first 100 models, which improve too fast.
 
@@ -291,14 +293,13 @@ def sync(root, force_all=False):
 
 def wins_subset(bucket):
     with sqlite3.connect('ratings.db') as db:
+        # this over counts bad andrew
         data = db.execute(
-            "select model_winner, model_loser from wins "
-            "join models where "
-            "    models.bucket = ? AND "
-            "    (model_winner = models.id or model_loser = models.id)",
-            (bucket,)).fetchall()
+            "SELECT model_winner, model_loser FROM wins WHERE"
+            "  (model_winner in (SELECT id FROM models where bucket = ?)) or "
+            "  (model_loser  in (SELECT id FROM models where bucket = ?)) ",
+            (bucket, bucket)).fetchall()
     return data
-
 
 def main():
     root = os.path.abspath(os.path.join("sgf", fsdb.FLAGS.bucket_name, "sgf/eval"))
