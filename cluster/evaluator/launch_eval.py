@@ -109,8 +109,8 @@ def cross_run_eval(run_a, model_a, run_b, model_b):
 
     num_a = int(model_a.split('-')[0])
     num_b = int(model_b.split('-')[0])
-    assert 0 <= num_a <= 1000, num_a
-    assert 0 <= num_b <= 1000, num_b
+    assert 0 <= num_a <= 1005, num_a
+    assert 0 <= num_b <= 1005, num_b
 
     PROJECT = os.environ.get("PROJECT")
     bucket_a = "gs://{}-minigo-{}-19".format(PROJECT, run_a)
@@ -140,22 +140,26 @@ def add_uncertain_pairs(dry_run=False):
 
 
 def get_cross_eval_pairs():
-    #def cross_run_eval(run_a, model_a, run_b, model_b):
-
     all_models = read_cross_run_models()
     print(len(all_models), "cross eval models")
 
     # key in ratings.db
     model_ids = {m[1]: ratings.model_id(m[1]) for m in all_models}
     assert len(model_ids) == len(all_models), "Duplicate model name!"
-#    assert len(model_ids) == len(set(model_ids.values())), "Duplicate row!"
+    assert len(model_ids) >= len(set(model_ids.values())), "Duplicate row!"
 
     raw_scores = ratings.compute_ratings()
-    r = {ratings.model_name_for(k): v[0] for k, v in raw_scores.items()}
+    r = {ratings.model_name_for(k): v for k, v in raw_scores.items()}
     print (len(r), "ratings")
 
     game_counts = Counter(ratings.wins_subset(fsdb.models_dir()))
     print ("Found", sum(game_counts.values()), "games")
+
+    model_game_counts = Counter()
+    for (winner, losser), count in game_counts.items():
+        model_game_counts[winner] += count
+        model_game_counts[losser] += count
+
 
     existing_pairs, previous_pairs = restore_pairs()
 
@@ -166,36 +170,66 @@ def get_cross_eval_pairs():
             if (run_a, model_a) >= (run_b, model_b):
                 continue
 
-            # if not present use model_num as rating which helps sparse rating.
-            r_a = r.get(model_a, int(model_a.split('-')[0]))
-            r_b = r.get(model_b, int(model_b.split('-')[0]))
-
-            win_prob = 1 / (1 + 10 ** (-(r_a - r_b)/400))
-            variance = win_prob * (1 - win_prob)
-
-            # count of head to head encounters
-            games = (game_counts[(model_ids[model_a], model_ids[model_b])] +
-                     game_counts[(model_ids[model_b], model_ids[model_a])])
-
-            # Controls how much to explore unique pairs verus equal strength.
-            power = 2.5
-            priority = variance  / (1 + games) ** power
+            # Potentially relax this a portion of the time.
+            if run_a == run_b:
+                continue
 
             pair = [run_a, model_a, run_b, model_b]
+            # If already being processed, will cause kubernetes error.
             if pair in previous_pairs:
                 continue
-            pairs.append((priority, pair))
+
+            # if not present use model_num as rating which helps sparse rating.
+            r_a = r.get(model_a, [3 * int(model_a.split('-')[0]), 0])
+            r_b = r.get(model_b, [3 * int(model_b.split('-')[0]), 0])
+
+            win_prob = 1 / (1 + 10 ** (-(r_a[0] - r_b[0])/400))
+            variance = win_prob * (1 - win_prob)
+
+            model_id_a = model_ids[model_a]
+            model_id_b = model_ids[model_b]
+
+            # count of head to head encounters.
+            games = (game_counts[(model_id_a, model_id_b)] +
+                     game_counts[(model_id_b, model_id_a)])
+
+            # count of games played by each model.
+            model_a_games = model_game_counts[model_id_a]
+            model_b_games = model_game_counts[model_id_b]
+
+
+            # Controls how much to explore unique pairs verus equal strength.
+            power = 0.8
+            uncertainty_const = 1200
+
+            # priority based on model variances
+            joint_uncertainty = (r_a[1] ** 2 + r_b[1] ** 2) ** 0.5
+            uncertainty_priority = joint_uncertainty / uncertainty_const
+
+            # priority based on information gained by playing this pairing
+            pairing_priority = variance  / (1 + games) ** power
+
+            # priority based on playing a game with this model
+            model_priority = (1 / (1 + model_a_games) ** power +
+                              1 / (1 + model_b_games) ** power)
+
+            priority = pairing_priority + model_priority + uncertainty_priority
+            pairs.append((
+                [priority, win_prob, joint_uncertainty, games, model_a_games, model_b_games],
+                pair))
 
     pairs.sort(reverse=True)
-    pairs = pairs[:10]
+    pairs = pairs[:5]
     for priority, pair in pairs:
-        print ("Consider priority:", priority, "pair:", pair)
+        print ("Consider priority: {:.3f}, win_prob: {:.2f}, var: {:.1f}, games: {}, {}, {}, pair: {}, {}, {}, {}".format(
+            *(priority + pair)))
 
     new_pairs = [pair for _, pair in pairs if pair not in existing_pairs]
 
     existing_pairs += new_pairs
     print("Adding {} new pairs, queue has {} pairs".format(
         len(new_pairs), len(existing_pairs)))
+    print()
     save_pairs((existing_pairs, previous_pairs))
 
 
@@ -212,83 +246,7 @@ def add_top_pairs(dry_run=False):
     _append_pairs(new_pairs, dry_run)
 
 
-def zoo_loop(sgf_dir=None, max_jobs=40):
-    """Manages creating and cleaning up match jobs.
-
-    - Load whatever pairs didn't get queued last time, and whatever our most
-      recently seen model was.
-    - Loop and...
-        - If a new model is detected, create and append new pairs to the list
-        - Automatically queue models from a list of pairs to keep a cluster
-          busy
-        - As jobs finish, delete them from the cluster.
-        - If we crash, write out the list of pairs we didn't manage to queue
-
-    sgf_dir -- the directory where sgf eval games should be used for computing
-      ratings.
-    max_jobs -- the maximum number of concurrent jobs.  jobs * completions * 2
-      should be around 500 to keep kubernetes from losing track of completions
-    """
-    desired_pairs = restore_pairs() or []
-    last_model_queued = restore_last_model()
-
-    if sgf_dir:
-        sgf_dir = os.path.abspath(sgf_dir)
-
-    api_instance = get_api()
-    try:
-        while True:
-            last_model = fsdb.get_latest_pb()[0]
-            if last_model_queued < last_model:
-                print("Adding models {} to {} to be scheduled".format(
-                    last_model_queued+1, last_model))
-                for m in reversed(range(last_model_queued+1, last_model+1)):
-                    desired_pairs += make_pairs_for_model(m)
-                last_model_queued = last_model
-                save_last_model(last_model)
-
-            cleanup(api_instance)
-            r = api_instance.list_job_for_all_namespaces()
-            if len(r.items) < max_jobs:
-                if len(desired_pairs) == 0:
-                    if sgf_dir:
-                        print("Out of pairs!  Syncing new eval games...")
-                        ratings.sync(sgf_dir)
-                        print("Updating ratings and getting suggestions...")
-                        add_uncertain_pairs()
-                        desired_pairs = restore_pairs() or []
-                        print("Got {} new pairs".format(len(desired_pairs)))
-                        print(ratings.top_n())
-                    else:
-                        print("Out of pairs!  Sleeping")
-                        time.sleep(300)
-                        continue
-
-                next_pair = desired_pairs.pop()  # take our pair off
-                print("Enqueuing:", next_pair)
-                try:
-                    same_run_eval(*next_pair)
-                except:
-                    desired_pairs.append(next_pair)
-                    raise
-                save_pairs(sorted(desired_pairs))
-                save_last_model(last_model)
-                time.sleep(6)
-
-            else:
-                print("{}\t{} jobs outstanding. ({} to be scheduled)".format(
-                      time.strftime("%I:%M:%S %p"),
-                      len(r.items), len(desired_pairs)))
-                time.sleep(60)
-    except:
-        print("Unfinished pairs:")
-        print(sorted(desired_pairs))
-        save_pairs(sorted(desired_pairs))
-        save_last_model(last_model)
-        raise
-
-
-def cross_run_eval_matchmaker_loop(sgf_dir, max_jobs=40):
+def cross_run_eval_matchmaker_loop(sgf_dir, max_jobs=60):
     """Manages creating and cleaning up cross bucket evaluation jobs.
 
     sgf_dir -- the directory where sgf eval games should be used for computing
@@ -306,10 +264,10 @@ def cross_run_eval_matchmaker_loop(sgf_dir, max_jobs=40):
             cleanup(api_instance)
             r = api_instance.list_job_for_all_namespaces()
             if len(r.items) >= max_jobs:
-                print("{}\t{} jobs outstanding. ({} to be scheduled)".format(
+                print("{}\t{} jobs outstanding. ({} in the queue)".format(
                       time.strftime("%I:%M:%S %p"),
                       len(r.items), len(desired_pairs)))
-                time.sleep(60)
+                time.sleep(30)
             else:
                 if len(desired_pairs) == 0:
                     if sgf_dir:
@@ -324,9 +282,9 @@ def cross_run_eval_matchmaker_loop(sgf_dir, max_jobs=40):
                         time.sleep(300)
                         continue
 
-                next_pair = desired_pairs.pop()  # take our pair off
-                existing_pairs.append(next_pair)
+                next_pair = desired_pairs.pop()
                 print("Queue", len(desired_pairs), "items", len(existing_pairs), "previous")
+                existing_pairs.append(next_pair)
                 print("Enqueuing:", next_pair)
                 cross_run_eval(*next_pair)
                 save_pairs((desired_pairs, existing_pairs[-80:]))
@@ -399,7 +357,6 @@ def make_pairs_for_model(model_num=0):
 if __name__ == '__main__':
     remaining_argv = flags.FLAGS(sys.argv, known_only=True)
     fire.Fire({
-        'zoo_loop': zoo_loop,
         'cross_run_eval_matchmaker_loop': cross_run_eval_matchmaker_loop,
         'same_run_eval': same_run_eval,
         'cross_run_eval': cross_run_eval,

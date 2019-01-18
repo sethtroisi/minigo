@@ -35,8 +35,8 @@ TOP_MODELS_PER_RUN = 25
 def main():
     #assert len(sys.argv) == 3, sys.argv
     #path = sys.argv[1]
-    in_path = 'cross_eval_ratings_2019_01.csv'
-    out_path = 'cross_eval_models.json'
+    in_path = 'cross_eval_ratings_2019_01_18.csv'
+    out_path = 'cross_eval_models2.json'
 
     with open(in_path) as csv_file:
         data = csv.reader(csv_file)
@@ -83,8 +83,8 @@ def main():
     keep = []
     # only interested in some runs
     for version in range(9, 16):
-        if version == 10:
-            # v10 failed
+        if version == 11:
+            # v11 failed
             continue
 
         run = 'v{}-19x19'.format(version)

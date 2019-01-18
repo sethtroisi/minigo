@@ -281,12 +281,11 @@ def sync(root, force_all=False):
             cmd = ["gsutil", "-m", "rsync", "-r", os.path.join(fsdb.eval_dir(), d), os.path.join(root, d)]
             print(" ".join(cmd))
             subprocess.call(cmd)
-
         ingest_dirs(root, ds)
     else:
-        cmd = ["gsutil", "-m", "rsync", "-r", fsdb.eval_dir(), root]
-        print(" ".join(cmd))
-        subprocess.call(cmd)
+        #cmd = ["gsutil", "-m", "rsync", "-r", fsdb.eval_dir(), root]
+        #print(" ".join(cmd))
+        #subprocess.call(cmd)
         dirs = os.listdir(root)
         ingest_dirs(root, dirs)
 
