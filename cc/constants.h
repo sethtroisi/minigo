@@ -34,9 +34,7 @@ constexpr float kDefaultKomi = 7.5;
 
 constexpr float kDirichletAlpha = 0.03f * 361 / (kN * kN);
 
-constexpr float kVisitCountSquash = 0.98;
-
-static constexpr float kPuct = 0.96;
+static constexpr float kPuct = 2.50;
 
 }  // namespace minigo
 

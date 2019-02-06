@@ -76,7 +76,7 @@ class TestablePlayer : public MctsPlayer {
   }
 
   void TreeSearch(int virtual_losses) {
-    mutable_options()->batch_size = virtual_losses;
+    mutable_options()->virtual_losses = virtual_losses;
     TreeSearch();
   }
 };
@@ -92,7 +92,8 @@ std::unique_ptr<TestablePlayer> CreateBasicPlayer(MctsPlayer::Options options) {
       &player->root()->position.stones()};
   DualNet::SetFeatures(positions, Color::kBlack, &features);
   auto output = player->Run(features);
-  first_node->IncorporateResults(output.policy, output.value, player->root());
+  first_node->IncorporateResults(0.0, output.policy, output.value,
+                                 player->root());
   return player;
 }
 
@@ -100,7 +101,7 @@ std::unique_ptr<TestablePlayer> CreateAlmostDonePlayer(int n) {
   // Always use a deterministic random seed.
   MctsPlayer::Options options;
   options.random_seed = 17;
-  options.komi = 2.5;
+  options.game_options.komi = 2.5;
   // Don't apply random symmetries. If we did, the probabilities we set in
   // the FakeDualNet won't be chosen correctly (since the board position will be
   // randomly transformed).
@@ -157,7 +158,7 @@ TEST(MctsPlayerTest, InjectNoise) {
     EXPECT_EQ(root->child_U(0), root->child_U(i));
   }
 
-  root->InjectNoise(player->Noise());
+  root->InjectNoise(player->Noise(), 0.25);
 
   // Priors should still be normalized after injecting noise.
   sum_P = 0;
@@ -229,7 +230,8 @@ TEST(MctsPlayerTest, PickMoveSoft) {
 TEST(MctsPlayerTest, DontPassIfLosing) {
   auto player = CreateAlmostDonePlayer(0);
   auto* root = player->root();
-  EXPECT_EQ(-0.5, root->position.CalculateScore(player->options().komi));
+  EXPECT_EQ(-0.5,
+            root->position.CalculateScore(player->options().game_options.komi));
 
   for (int i = 0; i < 20; ++i) {
     player->TreeSearch(1);
@@ -237,7 +239,7 @@ TEST(MctsPlayerTest, DontPassIfLosing) {
 
   // Search should converge on D9 as only winning move.
   auto best_move = ArgMax(root->edges, MctsNode::CmpN);
-  ASSERT_EQ(Coord::FromKgs("D9"), best_move);
+  ASSERT_EQ(Coord::FromGtp("D9"), best_move);
   // D9 should have a positive value.
   EXPECT_LT(0, root->child_Q(best_move));
   EXPECT_LE(20, root->N());
@@ -345,14 +347,17 @@ TEST(MctsPlayerTest, OnlyCheckGameEndOnce) {
   BoardVisitor bv;
   GroupVisitor gv;
   Position position(&bv, &gv, Color::kBlack);
-  position.PlayMove({3, 3});  // B plays.
-  position.PlayMove({3, 4});  // W plays.
-  position.PlayMove({4, 3});  // B plays.
-  // W passes. If B passes too, B would lose by komi..
-  position.PlayMove(Coord::kPass);
 
   auto player = absl::make_unique<TestablePlayer>(MctsPlayer::Options());
   player->InitializeGame(position);
+
+  MG_CHECK(player->PlayMove({3, 3}, nullptr));  // B plays.
+  MG_CHECK(player->PlayMove({3, 4}, nullptr));  // W plays.
+  MG_CHECK(player->PlayMove({4, 3}, nullptr));  // B plays.
+
+  // W passes. If B passes too, B would lose by komi..
+  MG_CHECK(player->PlayMove(Coord::kPass, nullptr));
+
   auto* root = player->root();
 
   // Initialize the root
@@ -368,38 +373,42 @@ TEST(MctsPlayerTest, OnlyCheckGameEndOnce) {
 
 TEST(MctsPlayerTest, ExtractDataNormalEnd) {
   auto player = absl::make_unique<TestablePlayer>(MctsPlayer::Options());
+  Game game("b", "w", player->options().game_options);
+
   player->TreeSearch(1);
-  player->PlayMove(Coord::kPass);
+  player->PlayMove(Coord::kPass, &game);
   player->TreeSearch(1);
-  player->PlayMove(Coord::kPass);
+  player->PlayMove(Coord::kPass, &game);
 
   auto* root = player->root();
   EXPECT_TRUE(root->game_over());
   EXPECT_EQ(Color::kBlack, root->position.to_play());
 
-  ASSERT_EQ(2, player->history().size());
+  ASSERT_EQ(2, game.num_moves());
 
   // White wins by komi
-  EXPECT_EQ(-1, player->result());
-  EXPECT_EQ("W+7.5", player->result_string());
+  EXPECT_EQ(-1, game.result());
+  EXPECT_EQ("W+7.5", game.result_string());
 }
 
 TEST(MctsPlayerTest, ExtractDataResignEnd) {
   auto player = absl::make_unique<TestablePlayer>(MctsPlayer::Options());
+  Game game("b", "w", player->options().game_options);
   player->TreeSearch(1);
-  player->PlayMove({0, 0});
+  player->PlayMove({0, 0}, &game);
   player->TreeSearch(1);
-  player->PlayMove(Coord::kPass);
+  player->PlayMove(Coord::kPass, &game);
   player->TreeSearch(1);
-  player->PlayMove(Coord::kResign);
+  player->PlayMove(Coord::kResign, &game);
 
   auto* root = player->root();
 
   // Black is winning on the board.
-  EXPECT_LT(0, root->position.CalculateScore(player->options().komi));
+  EXPECT_LT(0,
+            root->position.CalculateScore(player->options().game_options.komi));
 
-  EXPECT_EQ(-1, player->result());
-  EXPECT_EQ("W+R", player->result_string());
+  EXPECT_EQ(-1, game.result());
+  EXPECT_EQ("W+R", game.result_string());
 }
 
 // Fake DualNet implementation used to verify that MctsPlayer symmetries work
@@ -460,7 +469,7 @@ TEST(MctsPlayerTest, SymmetriesTest) {
   std::vector<std::string> moves = {"B3", "F1", "C7"};
   auto* parent = root;
   for (const auto& move : moves) {
-    nodes.push_back(absl::make_unique<MctsNode>(parent, Coord::FromKgs(move)));
+    nodes.push_back(absl::make_unique<MctsNode>(parent, Coord::FromGtp(move)));
     parent = nodes.back().get();
   }
 
@@ -474,11 +483,11 @@ TEST(MctsPlayerTest, SymmetriesTest) {
     path.leaf = leaf;
     leaf->AddVirtualLoss(root);
     player.ProcessLeaves({&path, 1}, true);
-    ASSERT_EQ(0.0, leaf->child_P(Coord::FromKgs("pass")));
+    ASSERT_EQ(0.0, leaf->child_P(Coord::FromGtp("pass")));
     for (const auto move : moves) {
       // Playing where stones exist is illegal and should have been marked as 0.
-      ASSERT_EQ(0.0, leaf->child_P(Coord::FromKgs(move)));
-      for (const auto n : kNeighborCoords[Coord::FromKgs(move)]) {
+      ASSERT_EQ(0.0, leaf->child_P(Coord::FromGtp(move)));
+      for (const auto n : kNeighborCoords[Coord::FromGtp(move)]) {
         ASSERT_NEAR(policy_fraction, leaf->child_P(n), 1e-7);
       }
     }
@@ -491,7 +500,7 @@ TEST(MctsPlayerTest, ResetRoot) {
   auto* game_root = player->root();
 
   auto c = Coord(12);
-  player->PlayMove(c);
+  player->PlayMove(c, nullptr);
 
   EXPECT_EQ(c, player->root()->move);
   player->ResetRoot();
@@ -500,28 +509,29 @@ TEST(MctsPlayerTest, ResetRoot) {
 
 TEST(MctsPlayerTest, UndoMove) {
   auto player = absl::make_unique<TestablePlayer>(MctsPlayer::Options());
+  Game game("b", "w", player->options().game_options);
 
   // Can't undo without first playing a move.
-  EXPECT_FALSE(player->UndoMove());
+  EXPECT_FALSE(player->UndoMove(&game));
 
-  player->PlayMove(Coord::kPass);
-  player->PlayMove(Coord::kPass);
+  player->PlayMove(Coord::kPass, &game);
+  player->PlayMove(Coord::kPass, &game);
 
   auto* root = player->root();
-  EXPECT_TRUE(root->game_over());
+  EXPECT_TRUE(game.game_over());
   EXPECT_EQ(Color::kBlack, root->position.to_play());
-  ASSERT_EQ(2, player->history().size());
-  EXPECT_EQ(-1, player->result());
-  EXPECT_EQ("W+7.5", player->result_string());
+  ASSERT_EQ(2, game.num_moves());
+  EXPECT_EQ(-1, game.result());
+  EXPECT_EQ("W+7.5", game.result_string());
 
   // Undo the last pass, the game should no longer be over.
-  EXPECT_TRUE(player->UndoMove());
+  EXPECT_TRUE(player->UndoMove(&game));
 
   root = player->root();
   EXPECT_FALSE(root->game_over());
   EXPECT_EQ(Coord::kPass, root->move);
   EXPECT_EQ(Color::kWhite, root->position.to_play());
-  ASSERT_EQ(1, player->history().size());
+  EXPECT_EQ(1, game.num_moves());
 }
 
 }  // namespace

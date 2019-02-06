@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import {App} from './app'
+import {Color} from './base'
 import {Board} from './board'
 import * as lyr from './layer'
 import {Log} from './log'
@@ -36,9 +37,9 @@ class KioskApp extends App {
             new lyr.Variation('pv'),
             new lyr.Annotations()]),
         new Board('search-board', this.rootPosition, [
-            new lyr.Caption('search'),
+            new lyr.Caption('live'),
             new lyr.BoardStones(),
-            new lyr.Variation('search')]),
+            new lyr.Variation('live')]),
         new Board('n-board', this.rootPosition, [
             new lyr.Caption('N'),
             new lyr.VisitCountHeatMap(),
@@ -75,13 +76,14 @@ class KioskApp extends App {
     for (let board of this.boards) {
       board.setPosition(position);
     }
-    this.winrateGraph.update(position);
+    this.winrateGraph.setActive(position);
     this.log.scroll();
 
     if (this.activePosition.gameOver) {
       window.setTimeout(() => { this.newGame(); }, 3000);
     } else {
-      this.gtp.send('genmove');
+      let colorStr = this.activePosition.toPlay == Color.Black ? 'b' : 'w';
+      this.gtp.send(`genmove ${colorStr}`);
     }
   }
 

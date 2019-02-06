@@ -34,12 +34,27 @@ namespace minigo {
 
 class MctsNode {
  public:
+  struct TreeStats {
+    int num_nodes = 0;
+    int num_leaf_nodes = 0;
+    int max_depth = 0;
+    int depth_sum = 0;
+
+    std::string ToString() const;
+  };
+
   struct EdgeStats {
-    // TODO(tom): consider moving N into the MctsNode to save memory.
     float N = 0;
     float W = 0;
     float P = 0;
     float original_P = 0;
+  };
+
+  // Information about a child. Returned by CalculateRankedChildInfo.
+  struct ChildInfo {
+    Coord c = Coord::kInvalid;
+    float N;
+    float action_score;
   };
 
   static bool CmpN(const EdgeStats& a, const EdgeStats& b) { return a.N < b.N; }
@@ -72,9 +87,9 @@ class MctsNode {
   }
 
   bool game_over() const {
-    return (position.previous_move() == Coord::kResign) ||
-           (position.previous_move() == Coord::kPass && parent != nullptr &&
-            parent->position.previous_move() == Coord::kPass);
+    return (move == Coord::kResign) ||
+           (move == Coord::kPass && parent != nullptr &&
+            parent->move == Coord::kPass);
   }
   bool at_move_limit() const { return position.n() >= kMaxSearchDepth; }
 
@@ -94,6 +109,9 @@ class MctsNode {
   std::string MostVisitedPathString() const;
   std::vector<Coord> MostVisitedPath() const;
 
+  // Sorts the child nodes by visit counts, breaking ties by child action score.
+  std::array<ChildInfo, kNumMoves> CalculateRankedChildInfo() const;
+
   // Returns up to the last num_moves of moves that lead up to this node,
   // including the node itself.
   // After GetMoveHistory returns, history[0] is this MctsNode and history[i] is
@@ -101,7 +119,9 @@ class MctsNode {
   void GetMoveHistory(int num_moves,
                       std::vector<const Position::Stones*>* history) const;
 
-  void InjectNoise(const std::array<float, kNumMoves>& noise);
+  // Mix noise into the node's priors:
+  //   P_i = (1 - mix) * P_i + mix * noise_i
+  void InjectNoise(const std::array<float, kNumMoves>& noise, float mix);
 
   // Selects the next leaf node for inference.
   // If inference is being batched and SelectLeaf chooses a node that has
@@ -109,7 +129,8 @@ class MctsNode {
   // called), then SelectLeaf will return that same node.
   MctsNode* SelectLeaf();
 
-  void IncorporateResults(absl::Span<const float> move_probabilities,
+  void IncorporateResults(float value_init_penalty,
+                          absl::Span<const float> move_probabilities,
                           float value, MctsNode* up_to);
 
   void IncorporateEndGameResult(float value, MctsNode* up_to);
@@ -123,8 +144,6 @@ class MctsNode {
   // Remove all children from the node except c.
   void PruneChildren(Coord c);
 
-  // TODO(tommadams): Validate returning by value has the same performance as
-  // passing a pointer to the output array.
   std::array<float, kNumMoves> CalculateChildActionScore() const;
 
   bool HasPositionBeenPlayedBefore(zobrist::Hash stone_hash) const;
@@ -139,8 +158,7 @@ class MctsNode {
   MctsNode* MaybeAddChild(Coord c);
 
   // Calculate and print statistics about the tree.
-  std::string CalculateTreeStats() const;
-
+  TreeStats CalculateTreeStats() const;
 
   // Parent node.
   MctsNode* parent;

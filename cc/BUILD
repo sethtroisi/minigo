@@ -123,6 +123,34 @@ minigo_cc_library(
 )
 
 minigo_cc_library(
+    name = "game",
+    srcs = ["game.cc"],
+    hdrs = ["game.h"],
+    deps = [
+        ":base",
+        ":position",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+    ],
+)
+
+minigo_cc_library(
+    name = "game_utils",
+    srcs = ["game_utils.cc"],
+    hdrs = ["game_utils.h"],
+    deps = [
+        ":base",
+        ":game",
+        ":sgf",
+        "//cc/file",
+        "//cc/platform",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/time",
+    ],
+)
+
+minigo_cc_library(
     name = "gtp_player",
     srcs = ["gtp_player.cc"],
     hdrs = ["gtp_player.h"],
@@ -132,10 +160,8 @@ minigo_cc_library(
         ":sgf",
         "//cc:thread_safe_queue",
         "//cc/dual_net",
-        "@com_github_nlohmann_json//:json",
-        "@com_google_absl//absl/container:flat_hash_map",
+        "//cc/file",
         "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
     ],
 )
@@ -172,6 +198,25 @@ minigo_cc_library(
 )
 
 minigo_cc_library(
+    name = "minigui_player",
+    srcs = ["minigui_player.cc"],
+    hdrs = ["minigui_player.h"],
+    deps = [
+        ":base",
+        ":gtp_player",
+        ":mcts",
+        ":sgf",
+        "//cc/dual_net",
+        "//cc/file",
+        "@com_github_nlohmann_json//:json",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/time",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+minigo_cc_library(
     name = "mcts",
     srcs = [
         "mcts_node.cc",
@@ -183,6 +228,7 @@ minigo_cc_library(
     ],
     deps = [
         ":base",
+        ":game",
         ":logging",
         ":position",
         ":random",
@@ -233,6 +279,7 @@ minigo_cc_library(
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 
@@ -268,7 +315,7 @@ minigo_cc_library(
     deps = [
                ":base",
                ":logging",
-               ":mcts",
+               ":game",
                "//cc/file",
                "//cc/dual_net",
                "@com_google_absl//absl/strings:str_format",
@@ -417,17 +464,80 @@ minigo_cc_test(
 )
 
 minigo_cc_binary(
-    name = "main",
-    srcs = ["main.cc"],
+    name = "eval",
+    srcs = ["eval.cc"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":base",
+        ":game_utils",
+        ":init",
+        ":logging",
+        ":mcts",
+        ":random",
+        ":tf_utils",
+        ":zobrist",
+        "//cc/dual_net:batching_dual_net",
+        "//cc/dual_net:factory",
+        "//cc/file",
+        "@com_github_gflags_gflags//:gflags",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/time",
+    ],
+)
+
+minigo_cc_binary(
+    name = "gtp",
+    srcs = ["gtp.cc"],
     visibility = ["//visibility:public"],
     deps = [
         ":base",
         ":gtp_player",
         ":init",
+        ":minigui_player",
+        ":zobrist",
+        "//cc/dual_net:factory",
+        "//cc/file",
+        "@com_github_gflags_gflags//:gflags",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+minigo_cc_binary(
+    name = "puzzle",
+    srcs = ["puzzle.cc"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":base",
+        ":init",
+        ":logging",
+        ":mcts",
+        ":sgf",
+        ":zobrist",
+        "//cc/dual_net:batching_dual_net",
+        "//cc/dual_net:factory",
+        "//cc/file",
+        "//cc/platform",
+        "@com_github_gflags_gflags//:gflags",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+    ],
+)
+
+minigo_cc_binary(
+    name = "selfplay",
+    srcs = ["selfplay.cc"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":base",
+        ":game_utils",
+        ":init",
         ":logging",
         ":mcts",
         ":random",
-        ":sgf",
         ":tf_utils",
         ":zobrist",
         "//cc/dual_net:batching_dual_net",
@@ -441,6 +551,23 @@ minigo_cc_binary(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
+    ],
+)
+
+minigo_cc_binary(
+    name = "simple_example",
+    srcs = ["simple_example.cc"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":base",
+        ":init",
+        ":logging",
+        ":mcts",
+        ":random",
+        ":zobrist",
+        "//cc/dual_net:factory",
+        "//cc/platform",
+        "@com_github_gflags_gflags//:gflags",
     ],
 )
 

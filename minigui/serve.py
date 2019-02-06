@@ -12,58 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import time
+import threading
+import subprocess
+import select
+import logging
+import json
+import functools
+from flask_socketio import SocketIO
+import absl.app
+from flask import Flask
+from absl import flags
 import os
 import sys
 sys.path.insert(0, ".")  # to run from minigo/ dir
 
-
-from absl import flags
-from flask import Flask
-import absl.app
-
-from flask_socketio import SocketIO
-
-import functools
-import json
-import logging
-import select
-import subprocess
-import threading
-
-flags.DEFINE_string("model", None, "Model path.")
-
-flags.DEFINE_integer(
-    "board_size", 19,
-    "Board size to use when running Python Minigo engine: either 9 or 19.")
 
 flags.DEFINE_integer("port", 5001, "Port to listen on.")
 
 flags.DEFINE_string("host", "127.0.0.1", "The hostname or IP to listen on.")
 
 flags.DEFINE_string(
-    "engine", "py",
-    "Which Minigo engine to use: \"py\" for the Python engine, or "
-    "one of the C++ engines (run \"cc/main --helpon=factory\" for the "
-    "C++ engine list.")
-
-flags.DEFINE_integer(
-    "virtual_losses", 8, "Number of virtual losses when running tree search.")
-
-flags.DEFINE_string(
-    "python_for_engine", "python",
-    "Which python interpreter to use for the engine. "
-    "Defaults to `python` and only applies for the when --engine=py")
-
-flags.DEFINE_boolean(
-    "inject_noise", False,
-    "If true, inject noise into the root position at the start of each "
-    "tree search.")
-
-flags.DEFINE_integer(
-    "num_readouts", 400,
-    "Number of searches to add to the MCTS search tree before playing a move.")
-
-flags.DEFINE_float("resign_threshold", -0.8, "Resign threshold.")
+    "control", None,
+    "Path to a control file used to configure the Go engine(s).")
 
 FLAGS = flags.FLAGS
 
@@ -75,94 +46,95 @@ app = Flask(__name__, static_url_path="", static_folder="static")
 app.config["SECRET_KEY"] = "woo"
 socketio = SocketIO(app, logger=log, engineio_logger=log)
 
-
-def _open_pipes():
-    if FLAGS.engine == "py":
-        GTP_COMMAND = [FLAGS.python_for_engine, "-u",  # turn off buffering
-                       "gtp.py",
-                       "--load_file=%s" % FLAGS.model,
-                       "--minigui_mode=true",
-                       "--num_readouts=%d" % FLAGS.num_readouts,
-                       "--conv_width=128",
-                       "--resign_threshold=%f" % FLAGS.resign_threshold,
-                       "--verbose=2"]
-    else:
-        GTP_COMMAND = [
-            "bazel-bin/cc/main",
-            "--model=%s" % FLAGS.model,
-            "--num_readouts=%d" % FLAGS.num_readouts,
-            "--soft_pick=false",
-            "--inject_noise=%s" % FLAGS.inject_noise,
-            "--disable_resign_pct=0",
-            "--courtesy_pass=true",
-            "--engine=%s" % FLAGS.engine,
-            "--virtual_losses=%d" % FLAGS.virtual_losses,
-            "--resign_threshold=%f" % FLAGS.resign_threshold,
-            "--mode=gtp"]
-
-    return subprocess.Popen(GTP_COMMAND,
-                            stdin=subprocess.PIPE,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            env=dict(os.environ, BOARD_SIZE=str(FLAGS.board_size)))
+board_size = None
+connections = {}
 
 
-token = ""
-echo_streams = True
-p = None
-stderr_done_semaphore = threading.Semaphore(0)
+class Player(object):
+    def __init__(self, command, startup_gtp_commands=[], cwd=None, environ={}):
+        self.command = command
+        self.startup_gtp_commands = startup_gtp_commands
+        self.cwd = cwd
+        self.environ = environ
+
+    def __repr__(self):
+        return 'Player("%s, startup_gtp_commands=%s, cwd="%s", environ=%s)' % (
+            self.command, self.startup_gtp_commands, self.cwd, self.environ)
 
 
-def process_line(stream_name, line):
-    global token
-    global echo_streams
+class Connection(object):
+    def __init__(self, name, process):
+        self.name = name
+        self.process = process
+        self._gtp_token = ""
+        self._gtp_cmd_done = threading.Semaphore(0)
+        self._echo_streams = True
+        self._lock = threading.Lock()
 
-    if echo_streams:
-        sys.stdout.write(line)
-        if "GTP engine ready" in line:
-            echo_streams = False
+    def process_line(self, stream_name, line):
+        with self._lock:
+            self._process_line_locked(stream_name, line)
 
-    # TODO(tommadams): trim newlines in the frontend to make sure we preserve
-    # the exact output of the engine.
-    if line[-1] == "\n":
-        line = line[:-1]
+    def wait_for_gtp_cmd_done(self):
+        self._gtp_cmd_done.acquire()
 
-    if line.startswith("= __NEW_TOKEN__ "):
-        token = line.split(" ", 3)[2]
-    socketio.send(json.dumps({stream_name: line, "token": token}),
-                  namespace="/minigui", json=True)
+    def signal_gtp_cmd_done(self):
+        self._gtp_cmd_done.release()
+
+    def write(self, cmd):
+        self.process.stdin.write(bytes("%s\r\n" % cmd, encoding="utf-8"))
+        self.process.stdin.flush()
+
+    def _process_line_locked(self, stream_name, line):
+        while line and (line[-1] == "\n" or line[-1] == "\r"):
+            line = line[:-1]
+
+        if self._echo_streams:
+            if stream_name == "stderr" and line.startswith("mg-"):
+                self._echo_streams = False
+            else:
+                print("%s(%s): %s" % (self.name, stream_name, line))
+
+        if line.startswith("= __NEW_TOKEN__ "):
+            self._gtp_token = line.split(" ", 3)[2]
+        socketio.send(json.dumps(
+            {"player": self.name, stream_name: line, "token": self._gtp_token}),
+            namespace="/minigui", json=True)
 
 
-def stderr_thread():
-    for line in p.stderr:
+def stderr_thread(connection):
+    for line in connection.process.stderr:
         line = line.decode()
         if line == "__GTP_CMD_DONE__\n":
-            stderr_done_semaphore.release()
+            connection.signal_gtp_cmd_done()
             continue
-        process_line('stderr', line)
-    print("stderr thread died")
+        connection.process_line("stderr", line)
+    print("%s: stderr thread died" % connection.name)
 
 
-def stdout_thread():
-    for line in p.stdout:
+def stdout_thread(connection):
+    for line in connection.process.stdout:
         line = line.decode()
-        if line[0] == '=' or line[0] == '?':
+        if line[0] == "=" or line[0] == "?":
             # We just read the result of a GTP command, Wait for all lines
             # written to stderr while processing that command to be read.
-            stderr_done_semaphore.acquire()
-        process_line('stdout', line)
-    print("stdout thread died")
+            connection.wait_for_gtp_cmd_done()
+        connection.process_line("stdout", line)
+    print("%s: stdout thread died" % connection.name)
 
 
 @socketio.on("gtpcmd", namespace="/minigui")
 def stdin_cmd(message):
-    print("C -> E:", message)
-    global p
+    player_name = message["player"]
+    data = message["data"]
     try:
-        p.stdin.write(bytes(message["data"] + "\r\n", encoding="utf-8"))
-        p.stdin.flush()
-    except BrokenPipeError:
-        p = _open_pipes()
+        connection = connections[player_name]
+    except KeyError:
+        print("Unknown player \"%s\"" % player_name)
+        return
+
+    print("%s(stdin): %s" % (player_name, data))
+    connection.write(data)
 
 
 @app.route("/")
@@ -170,14 +142,79 @@ def index():
     return app.send_static_file("index.html")
 
 
+@app.route("/config")
+def player_list():
+    return json.dumps({
+        "boardSize": board_size,
+        "players": sorted(connections.keys()),
+    })
+
+
 def main(unused_argv):
-    global p
-    p = _open_pipes()
-    socketio.start_background_task(stderr_thread)
-    socketio.start_background_task(stdout_thread)
+    # Compile and execute the control script.
+    result = {"Player": Player, "players": None, "board_size": 19}
+    with open(FLAGS.control, "r") as f:
+        source = f.read()
+    code = compile(source, FLAGS.control, "exec", 0, True)
+    exec(code, result)
+
+    # Read the board size.
+    global board_size
+    board_size = result["board_size"]
+
+    global connections
+    for name, player in result["players"].items():
+        print("Starting engine \"%s\"" % name)
+
+        # Split the command string into a list as required by Popen, and make
+        # sure the executable path is absolute.
+        command = player.command.split()
+        if os.path.exists(command[0]):
+            command[0] = os.path.abspath(command[0])
+
+        # Start this player subprocess.
+        process = subprocess.Popen(
+            command,
+            cwd=player.cwd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=dict(os.environ, **player.environ))
+
+        connection = Connection(name, process)
+
+        # Start the stderr handling thread immediately: if the engine writes to
+        # stderr before we've issued the board_size GTP command, stderr must be
+        # drained to avoid possible deadlock.
+        socketio.start_background_task(stderr_thread, connection)
+
+        # Verify that the engine supports the requested board size.
+        # We do this before starting the stdout handling thread so that we can
+        # block on the output of the boardsize GTP command.
+        connection.write("boardsize %d" % board_size)
+        connection.wait_for_gtp_cmd_done()
+        for line in process.stdout:
+            line = line.decode().rstrip()
+            if line == "=":
+                print("Engine \"%s\" supports board size %d" %
+                      (name, board_size))
+                break
+            elif line[0] == "?":
+                raise RuntimeError("Engine %s doesn't support boardsize %d" % (
+                    name, board_size))
+
+        # Now start the real stdout handling thread.
+        socketio.start_background_task(stdout_thread, connection)
+
+        # Process any startup commands for this engine.
+        for cmd in player.startup_gtp_commands:
+            connection.write(cmd)
+
+        connections[name] = connection
+
+    print("Starting server")
     socketio.run(app, port=FLAGS.port, host=FLAGS.host)
 
 
 if __name__ == "__main__":
-    flags.mark_flags_as_required(["model"])
     absl.app.run(main)

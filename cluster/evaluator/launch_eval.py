@@ -22,12 +22,16 @@ import time
 from collections import Counter
 
 import fire
+import random
 from absl import flags
 import kubernetes
 import yaml
 
 from rl_loop import fsdb
 from ratings import ratings
+
+MAX_TASKS = 250  # Keep < 500, or k8s may not track completions accurately.
+MIN_TASKS = 20
 
 
 def launch_eval_job(m1_path, m2_path, job_name, bucket_name, completions=5):
@@ -259,24 +263,47 @@ def cross_run_eval_matchmaker_loop(sgf_dir, max_jobs=60):
     sgf_dir = os.path.abspath(sgf_dir)
 
     api_instance = get_api()
+    toggle = True
     try:
         while True:
             cleanup(api_instance)
+            random.shuffle(desired_pairs)
             r = api_instance.list_job_for_all_namespaces()
+
             if len(r.items) >= max_jobs:
                 print("{}\t{} jobs outstanding. ({} in the queue)".format(
                       time.strftime("%I:%M:%S %p"),
                       len(r.items), len(desired_pairs)))
                 time.sleep(30)
+
+            if r.items:
+                tasks = sum([item.spec.completions for item in r.items])
             else:
+                tasks = 0
+            if tasks < MAX_TASKS:
                 if len(desired_pairs) == 0:
                     if sgf_dir:
+                        if tasks > MIN_TASKS:
+                            time.sleep(60)
+                            continue
                         print("Out of pairs!  Syncing new eval games...")
                         ratings.sync(sgf_dir)
                         print("Updating ratings and getting suggestions...")
+
                         get_cross_eval_pairs()
                         desired_pairs, existing_pairs = restore_pairs()
                         print("Got {} new pairs".format(len(desired_pairs)))
+
+                        if toggle:
+                          print("Pairing the top of the table.")
+                          add_top_pairs()
+                        else:
+                          print("Pairing the least-known models.")
+                          add_uncertain_pairs()
+                        toggle = not toggle
+                        for modelnum, rate in ratings.top_n():
+                          print("{:>30}: {:0.3f} ({:0.3f})".format(modelnum, rate[0], rate[1]))
+
                     else:
                         print("Out of pairs!  Sleeping")
                         time.sleep(300)
@@ -286,9 +313,27 @@ def cross_run_eval_matchmaker_loop(sgf_dir, max_jobs=60):
                 print("Queue", len(desired_pairs), "items", len(existing_pairs), "previous")
                 existing_pairs.append(next_pair)
                 print("Enqueuing:", next_pair)
+
                 cross_run_eval(*next_pair)
                 save_pairs((desired_pairs, existing_pairs[-80:]))
                 time.sleep(6)
+
+                try:
+                    same_run_eval(*next_pair)
+                except:
+                    desired_pairs.append(next_pair)
+                    raise
+                save_pairs(sorted(desired_pairs))
+                save_last_model(last_model)
+                time.sleep(1)
+
+            else:
+                print("{}\t {} finished / {} requested. "
+                      "({} jobs, {} pairs to be scheduled)".format(
+                      time.strftime("%I:%M:%S %p"),
+                      sum([i.status.succeeded or 0 for i in r.items]),
+                      tasks, len(r.items), len(desired_pairs)))
+                time.sleep(60)
     except:
         print("Finished pairs:", len(existing_pairs))
         print("Unfinished pairs:")

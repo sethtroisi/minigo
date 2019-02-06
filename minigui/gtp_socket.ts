@@ -36,27 +36,27 @@ function trimText(str: string, len: number) {
 class Socket {
   private sock: any = null;
   private cmdQueue: {cmd: string, resolve: any, reject: any}[] = [];
-  private gameToken: string;
+  private token: string;
   private handshakeComplete = false;
   private connectCallback: Nullable<ConnectCallback> = null;
   private lines: string[] = [];
 
   private dataHandlers: {prefix: string, handler: DataHandler}[] = [];
   private textHandlers: TextHandler[] = [];
-
+  private playerName = "";
   private debug = false;
 
   // Connects to the Minigui server at the given URI.
   // Returns a promise that gets resolved of the board size when the connection
   // is established.
-  connect(uri: string, debug=false) {
+  connect(uri: string, playerName: string, debug=false) {
+    this.playerName = playerName;
     this.debug = debug;
     this.sock = io.connect(uri)
 
     this.sock.on('json', (msg: string) => {
       let obj = JSON.parse(msg);
-      if (obj.token != this.gameToken) {
-        console.log('ignoring', obj, `${obj.token} != ${this.gameToken}`);
+      if (obj.token != this.token) {
         return;
       }
 
@@ -76,15 +76,7 @@ class Socket {
       // Connect to the server.
       this.sock.on('connect', () => {
         this.newSession();
-
-        // Probe for the supported board size.
-        // Minigo only supports a single board size and will reject GTP
-        // "boardsize" commands for any other size.
-        this.send('boardsize 9')
-          .then(() => { resolve(9); })
-          .catch(() => {
-            this.send('boardsize 19').then(() => { resolve(19); });
-          });
+        resolve();
       });
     });
   }
@@ -148,8 +140,8 @@ class Socket {
     // extracts the session token and then attaches that token to all subsequent
     // messages sent to the frontend.
     this.cmdQueue = [];
-    let token = `session-id-${Date.now()}`;
-    this.gameToken = token;
+    let token = `${this.playerName}-${Date.now()}`;
+    this.token = token;
     this.send(`echo __NEW_TOKEN__ ${token}`);
   }
 
@@ -157,10 +149,10 @@ class Socket {
     let {cmd, resolve, reject} = this.cmdQueue[0];
 
     if (this.debug) {
-      console.log(`### OUT ${cmd} ${line}`);
+      console.log(`### ${this.playerName} OUT ${cmd} ${line}`);
     }
 
-    this.textHandler(`${trimText(cmd, 1024)} ${trimText(line, 1024)}`);
+    this.textHandler(`${trimText(line, 1024)}`);
 
     if (line[0] == '=' || line[0] == '?') {
       // This line contains the response from a GTP command; pop the command off
@@ -184,7 +176,7 @@ class Socket {
     let handled = false;
 
     if (this.debug) {
-      console.log(`### ERR ${line}`);
+      console.log(`### ${this.playerName} ERR ${line}`);
     }
 
     for (let {prefix, handler} of this.dataHandlers) {
@@ -217,9 +209,9 @@ class Socket {
       this.textHandler(trimText(cmd, 1024));
     }
     if (this.debug) {
-      console.log(`### SND ${cmd}`);
+      console.log(`### ${this.playerName} SND ${cmd}`);
     }
-    this.sock.emit('gtpcmd', {data: cmd});
+    this.sock.emit('gtpcmd', {player: this.playerName, data: cmd});
   }
 }
 

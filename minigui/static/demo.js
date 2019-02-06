@@ -22,9 +22,9 @@ define(["require", "exports", "./app", "./base", "./board", "./layer", "./log", 
                 let searchElem = util_1.getElement('search-board');
                 if (searchElem) {
                     this.boards.push(new board_1.Board(searchElem, this.rootPosition, [
-                        new lyr.Caption('search'),
+                        new lyr.Caption('live'),
                         new lyr.BoardStones(),
-                        new lyr.Variation('search')
+                        new lyr.Variation('live')
                     ]));
                 }
                 let nElem = util_1.getElement('n-board');
@@ -92,17 +92,27 @@ define(["require", "exports", "./app", "./base", "./board", "./layer", "./log", 
                 return;
             }
             if (this.playerElems[this.activePosition.toPlay].innerText == MINIGO) {
-                this.mainBoard.enabled = false;
-                this.pvLayer.show = true;
-                this.engineBusy = true;
-                this.gtp.send('genmove').finally(() => {
-                    this.engineBusy = false;
-                });
+                this.genmove();
             }
             else {
                 this.mainBoard.enabled = true;
                 this.pvLayer.show = false;
             }
+        }
+        genmove() {
+            if (this.activePosition.gameOver || this.engineBusy) {
+                return;
+            }
+            this.mainBoard.enabled = false;
+            this.pvLayer.show = true;
+            this.engineBusy = true;
+            let colorStr = this.activePosition.toPlay == base_1.Color.Black ? 'b' : 'w';
+            this.gtp.send(`genmove ${colorStr}`).finally(() => {
+                this.engineBusy = false;
+                if (this.playerElems[this.activePosition.toPlay].innerText == MINIGO) {
+                    this.genmove();
+                }
+            });
         }
         onPositionUpdate(position, update) {
             if (position != this.activePosition) {
@@ -118,13 +128,13 @@ define(["require", "exports", "./app", "./base", "./board", "./layer", "./log", 
             for (let board of this.boards) {
                 board.setPosition(position);
             }
-            this.winrateGraph.update(position);
+            this.winrateGraph.setActive(position);
             this.log.scroll();
             this.onPlayerChanged();
         }
         playMove(color, move) {
             let colorStr = color == base_1.Color.Black ? 'b' : 'w';
-            let moveStr = base_1.toKgs(move);
+            let moveStr = base_1.toGtp(move);
             this.gtp.send(`play ${colorStr} ${moveStr}`);
         }
         onGameOver() {

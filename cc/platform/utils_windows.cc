@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "cc/platform/utils.h"
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <cstring>
+
 namespace minigo {
 
-bool FdSupportsAnsiColors(int fd) {
-  return false;
-}
+bool FdSupportsAnsiColors(int fd) { return false; }
 
 int GetNumLogicalCpus() {
   SYSTEM_INFO sysinfo;
@@ -27,5 +29,12 @@ int GetNumLogicalCpus() {
   return sysinfo.dwNumberOfProcessors;
 }
 
-}  // namespace minigo
+std::string GetHostname() {
+  char hostname[256];
+  if (gethostname(hostname, sizeof(hostname)) != 0) {
+    std::strncpy(hostname, "unknown", sizeof(hostname));
+  }
+  return std::string(hostname);
+}
 
+}  // namespace minigo

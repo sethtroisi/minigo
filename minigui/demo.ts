@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import {App} from './app'
-import {COL_LABELS, Color, Move, N, Nullable, toKgs} from './base'
+import {COL_LABELS, Color, Move, N, Nullable, toGtp} from './base'
 import {Board, ClickableBoard} from './board'
 import * as lyr from './layer'
 import {Log} from './log'
@@ -52,9 +52,9 @@ class DemoApp extends App {
       let searchElem = getElement('search-board');
       if (searchElem) {
         this.boards.push(new Board(searchElem, this.rootPosition, [
-            new lyr.Caption('search'),
+            new lyr.Caption('live'),
             new lyr.BoardStones(),
-            new lyr.Variation('search')]));
+            new lyr.Variation('live')]));
       }
 
       let nElem = getElement('n-board');
@@ -131,16 +131,28 @@ class DemoApp extends App {
     }
 
     if (this.playerElems[this.activePosition.toPlay].innerText == MINIGO) {
-      this.mainBoard.enabled = false;
-      this.pvLayer.show = true;
-      this.engineBusy = true;
-      this.gtp.send('genmove').finally(() => {
-        this.engineBusy = false;
-      });
+      this.genmove();
     } else {
       this.mainBoard.enabled = true;
       this.pvLayer.show = false;
     }
+  }
+
+  private genmove() {
+    if (this.activePosition.gameOver || this.engineBusy) {
+      return;
+    }
+
+    this.mainBoard.enabled = false;
+    this.pvLayer.show = true;
+    this.engineBusy = true;
+    let colorStr = this.activePosition.toPlay == Color.Black ? 'b' : 'w';
+    this.gtp.send(`genmove ${colorStr}`).finally(() => {
+      this.engineBusy = false;
+      if (this.playerElems[this.activePosition.toPlay].innerText == MINIGO) {
+        this.genmove();
+      }
+    });
   }
 
   protected onPositionUpdate(position: Position, update: Position.Update) {
@@ -158,14 +170,14 @@ class DemoApp extends App {
     for (let board of this.boards) {
       board.setPosition(position);
     }
-    this.winrateGraph.update(position);
+    this.winrateGraph.setActive(position);
     this.log.scroll();
     this.onPlayerChanged();
   }
 
   private playMove(color: Color, move: Move) {
     let colorStr = color == Color.Black ? 'b' : 'w';
-    let moveStr = toKgs(move);
+    let moveStr = toGtp(move);
     this.gtp.send(`play ${colorStr} ${moveStr}`);
   }
 
