@@ -30,8 +30,8 @@ import yaml
 from rl_loop import fsdb
 from ratings import ratings
 
-MAX_TASKS = 250  # Keep < 500, or k8s may not track completions accurately.
-MIN_TASKS = 20
+MAX_TASKS = 300  # Keep < 500, or k8s may not track completions accurately.
+MIN_TASKS = 100
 
 
 def launch_eval_job(m1_path, m2_path, job_name, bucket_name, completions=5):
@@ -153,8 +153,9 @@ def get_cross_eval_pairs():
     assert len(model_ids) >= len(set(model_ids.values())), "Duplicate row!"
 
     raw_scores = ratings.compute_ratings()
-    r = {ratings.model_name_for(k): v for k, v in raw_scores.items()}
-    print (len(r), "ratings")
+    rs = {ratings.model_name_for(k): v for k, v in raw_scores.items()}
+    ranks = {k: i for i, (r,k) in enumerate(sorted((r,k) for k, r in rs.items()))}
+    print (len(rs), "ratings")
 
     game_counts = Counter(ratings.wins_subset(fsdb.models_dir()))
     print ("Found", sum(game_counts.values()), "games")
@@ -163,7 +164,6 @@ def get_cross_eval_pairs():
     for (winner, losser), count in game_counts.items():
         model_game_counts[winner] += count
         model_game_counts[losser] += count
-
 
     existing_pairs, previous_pairs = restore_pairs()
 
@@ -184,8 +184,8 @@ def get_cross_eval_pairs():
                 continue
 
             # if not present use model_num as rating which helps sparse rating.
-            r_a = r.get(model_a, [3 * int(model_a.split('-')[0]), 0])
-            r_b = r.get(model_b, [3 * int(model_b.split('-')[0]), 0])
+            r_a = rs.get(model_a, [3 * int(model_a.split('-')[0]), 0])
+            r_b = rs.get(model_b, [3 * int(model_b.split('-')[0]), 0])
 
             win_prob = 1 / (1 + 10 ** (-(r_a[0] - r_b[0])/400))
             variance = win_prob * (1 - win_prob)
@@ -205,6 +205,12 @@ def get_cross_eval_pairs():
             # Controls how much to explore unique pairs verus equal strength.
             power = 0.8
             uncertainty_const = 1200
+            high_ratings_const = 0.02
+
+            # priority based on being highly ranked
+            # Higher = better
+            rank_num = max(ranks.get(model_a, 0), ranks.get(model_b, 0))
+            rank_adjustment = (2 * rank_num / len(rs)) ** 2 / 4
 
             # priority based on model variances
             joint_uncertainty = (r_a[1] ** 2 + r_b[1] ** 2) ** 0.5
@@ -218,14 +224,18 @@ def get_cross_eval_pairs():
                               1 / (1 + model_b_games) ** power)
 
             priority = pairing_priority + model_priority + uncertainty_priority
+
+
             pairs.append((
-                [priority, win_prob, joint_uncertainty, games, model_a_games, model_b_games],
+                [rank_adjustment * priority,
+                 rank_adjustment, win_prob, joint_uncertainty,
+                 games, model_a_games, model_b_games],
                 pair))
 
     pairs.sort(reverse=True)
     pairs = pairs[:5]
     for priority, pair in pairs:
-        print ("Consider priority: {:.3f}, win_prob: {:.2f}, var: {:.1f}, games: {}, {}, {}, pair: {}, {}, {}, {}".format(
+        print ("Priority: {:.3f}, rank adj: {:.2f}, win_prob: {:.2f}, var: {:.1f}, games: {}, {}, {}, pair: {}/{}, {}/{}".format(
             *(priority + pair)))
 
     new_pairs = [pair for _, pair in pairs if pair not in existing_pairs]
@@ -260,7 +270,8 @@ def cross_run_eval_matchmaker_loop(sgf_dir, max_jobs=60):
     """
     desired_pairs, existing_pairs = restore_pairs()
 
-    sgf_dir = os.path.abspath(sgf_dir)
+    if sgf_dir:
+        sgf_dir = os.path.abspath(sgf_dir)
 
     api_instance = get_api()
     toggle = True
@@ -284,7 +295,7 @@ def cross_run_eval_matchmaker_loop(sgf_dir, max_jobs=60):
                 if len(desired_pairs) == 0:
                     if sgf_dir:
                         if tasks > MIN_TASKS:
-                            time.sleep(60)
+                            time.sleep(30)
                             continue
                         print("Out of pairs!  Syncing new eval games...")
                         ratings.sync(sgf_dir)
@@ -293,17 +304,6 @@ def cross_run_eval_matchmaker_loop(sgf_dir, max_jobs=60):
                         get_cross_eval_pairs()
                         desired_pairs, existing_pairs = restore_pairs()
                         print("Got {} new pairs".format(len(desired_pairs)))
-
-                        if toggle:
-                          print("Pairing the top of the table.")
-                          add_top_pairs()
-                        else:
-                          print("Pairing the least-known models.")
-                          add_uncertain_pairs()
-                        toggle = not toggle
-                        for modelnum, rate in ratings.top_n():
-                          print("{:>30}: {:0.3f} ({:0.3f})".format(modelnum, rate[0], rate[1]))
-
                     else:
                         print("Out of pairs!  Sleeping")
                         time.sleep(300)
@@ -318,22 +318,13 @@ def cross_run_eval_matchmaker_loop(sgf_dir, max_jobs=60):
                 save_pairs((desired_pairs, existing_pairs[-80:]))
                 time.sleep(6)
 
-                try:
-                    same_run_eval(*next_pair)
-                except:
-                    desired_pairs.append(next_pair)
-                    raise
-                save_pairs(sorted(desired_pairs))
-                save_last_model(last_model)
-                time.sleep(1)
-
             else:
                 print("{}\t {} finished / {} requested. "
                       "({} jobs, {} pairs to be scheduled)".format(
                       time.strftime("%I:%M:%S %p"),
                       sum([i.status.succeeded or 0 for i in r.items]),
                       tasks, len(r.items), len(desired_pairs)))
-                time.sleep(60)
+                time.sleep(30)
     except:
         print("Finished pairs:", len(existing_pairs))
         print("Unfinished pairs:")
