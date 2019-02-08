@@ -27,15 +27,15 @@ import re
 import json
 
 # Number of models to select per run
-MODELS_PER_RUN = 100
+MODELS_PER_RUN = 80
 # Include this many of the best models (as determined by selfplay)
-TOP_MODELS_PER_RUN = 25
+TOP_MODELS_PER_RUN = 15
 
 
 def main():
     #assert len(sys.argv) == 3, sys.argv
     #path = sys.argv[1]
-    in_path = 'cross_eval_ratings_2019_01_18.csv'
+    in_path = 'cross_eval_ratings_2019_02_06.csv'
     out_path = 'cross_eval_models2.json'
 
     with open(in_path) as csv_file:
@@ -82,7 +82,7 @@ def main():
     all_names = {}
     keep = []
     # only interested in some runs
-    for version in range(9, 16):
+    for version in range(16, 17):
         if version == 11:
             # v11 failed
             continue

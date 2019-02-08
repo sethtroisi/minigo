@@ -113,8 +113,8 @@ def cross_run_eval(run_a, model_a, run_b, model_b):
 
     num_a = int(model_a.split('-')[0])
     num_b = int(model_b.split('-')[0])
-    assert 0 <= num_a <= 1005, num_a
-    assert 0 <= num_b <= 1005, num_b
+    assert 0 <= num_a <= 1100, num_a
+    assert 0 <= num_b <= 1100, num_b
 
     PROJECT = os.environ.get("PROJECT")
     bucket_a = "gs://{}-minigo-{}-19".format(PROJECT, run_a)
@@ -126,7 +126,7 @@ def cross_run_eval(run_a, model_a, run_b, model_b):
     tag = '{}-{}-vs-{}-{}'.format(run_a, num_a, run_b, num_b)
 
     cross_eval_bucket = PROJECT + '-minigo-cross-evals'
-    return launch_eval_job(path_a, path_b, tag, cross_eval_bucket, 3)
+    return launch_eval_job(path_a, path_b, tag, cross_eval_bucket, 5)
 
 
 def _append_pairs(new_pairs, dry_run):
@@ -187,9 +187,6 @@ def get_cross_eval_pairs():
             r_a = rs.get(model_a, [3 * int(model_a.split('-')[0]), 0])
             r_b = rs.get(model_b, [3 * int(model_b.split('-')[0]), 0])
 
-            win_prob = 1 / (1 + 10 ** (-(r_a[0] - r_b[0])/400))
-            variance = win_prob * (1 - win_prob)
-
             model_id_a = model_ids[model_a]
             model_id_b = model_ids[model_b]
 
@@ -203,25 +200,32 @@ def get_cross_eval_pairs():
 
 
             # Controls how much to explore unique pairs verus equal strength.
-            power = 0.8
+            games_power = 0.7
+            equality_const = 0.8
             uncertainty_const = 1200
             high_ratings_const = 0.02
 
             # priority based on being highly ranked
             # Higher = better
             rank_num = max(ranks.get(model_a, 0), ranks.get(model_b, 0))
-            rank_adjustment = (2 * rank_num / len(rs)) ** 2 / 4
+            rank_adjustment = (1 + rank_num / len(rs)) ** 2 / 4
+
+            # Do this for a while
+            if (rank_num + 25 < len(rs)):
+                continue
 
             # priority based on model variances
             joint_uncertainty = (r_a[1] ** 2 + r_b[1] ** 2) ** 0.5
             uncertainty_priority = joint_uncertainty / uncertainty_const
 
             # priority based on information gained by playing this pairing
-            pairing_priority = variance  / (1 + games) ** power
+            win_prob = 1 / (1 + 10 ** (-(r_a[0] - r_b[0])/400))
+            variance = win_prob * (1 - win_prob)
+            pairing_priority = equality_const * variance  / (1 + games) ** games_power
 
             # priority based on playing a game with this model
-            model_priority = (1 / (1 + model_a_games) ** power +
-                              1 / (1 + model_b_games) ** power)
+            model_priority = (1 / (1 + model_a_games) ** games_power +
+                              1 / (1 + model_b_games) ** games_power)
 
             priority = pairing_priority + model_priority + uncertainty_priority
 
@@ -233,12 +237,25 @@ def get_cross_eval_pairs():
                 pair))
 
     pairs.sort(reverse=True)
-    pairs = pairs[:5]
+    models_queued = set()
+
+    new_pairs = []
     for priority, pair in pairs:
+        if len(new_pairs) >= 8:
+            break
+
+        if pair in existing_pairs:
+            continue
+
+        if pair[1] in models_queued or pair[3] in models_queued:
+            continue
+
+        new_pairs.append(pair)
+        models_queued.add(pair[1])
+        models_queued.add(pair[3])
+
         print ("Priority: {:.3f}, rank adj: {:.2f}, win_prob: {:.2f}, var: {:.1f}, games: {}, {}, {}, pair: {}/{}, {}/{}".format(
             *(priority + pair)))
-
-    new_pairs = [pair for _, pair in pairs if pair not in existing_pairs]
 
     existing_pairs += new_pairs
     print("Adding {} new pairs, queue has {} pairs".format(

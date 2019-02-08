@@ -15,7 +15,9 @@ with open("oneoffs/cross_eval_models.json") as f:
     run_models = json.load(f)
 
 print (len(sql_models), "sql models")
-print (len(run_models), "run models")
+run_names = [m[1] for m in run_models]
+print (len(run_models), "run models", len(run_names))
+#print ([m for m in run_names if run_names.count(m) > 1])
 
 #print ("example sql:", sql_models[0])
 print ("example model:", run_models[0])
