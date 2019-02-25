@@ -161,9 +161,11 @@ def get_cross_eval_pairs():
     print ("Found", sum(game_counts.values()), "games")
 
     model_game_counts = Counter()
-    for (winner, losser), count in game_counts.items():
+    for (winner, loser), count in game_counts.items():
         model_game_counts[winner] += count
-        model_game_counts[losser] += count
+        model_game_counts[loser] += count
+
+    max_uncertainty = float(max([r[1] for r in rs.values()]))
 
     existing_pairs, previous_pairs = restore_pairs()
 
@@ -207,32 +209,34 @@ def get_cross_eval_pairs():
 
             # priority based on being highly ranked
             # Higher = better
-            rank_num = max(ranks.get(model_a, 0), ranks.get(model_b, 0))
+#            rank_num = max(ranks.get(model_a, 0), ranks.get(model_b, 0))
+            rank_num = min(ranks.get(model_a, 0), ranks.get(model_b, 0))
+
             rank_adjustment = (1 + rank_num / len(rs)) ** 2 / 4
 
-            # Do this for a while
-            if (rank_num + 25 < len(rs)):
-                continue
-
             # priority based on model variances
-            joint_uncertainty = (r_a[1] ** 2 + r_b[1] ** 2) ** 0.5
-            uncertainty_priority = joint_uncertainty / uncertainty_const
+#            joint_uncertainty = (r_a[1] ** 2 + r_b[1] ** 2) ** 0.5
+#            uncertainty_priority = joint_uncertainty / uncertainty_const
+            avg_u = (r_a[1] + r_b[1]) / 2.0
+            uncertainty_priority = avg_u / max_uncertainty
+
 
             # priority based on information gained by playing this pairing
-            win_prob = 1 / (1 + 10 ** (-(r_a[0] - r_b[0])/400))
+            win_prob = abs(1 / (1 + 10 ** (-(r_a[0] - r_b[0])/400)))
             variance = win_prob * (1 - win_prob)
-            pairing_priority = equality_const * variance  / (1 + games) ** games_power
+            #pairing_priority = equality_const * variance  / (1 + games) ** games_power
+            game_quality = win_prob * (1 - win_prob) + rank_adjustment
 
             # priority based on playing a game with this model
             model_priority = (1 / (1 + model_a_games) ** games_power +
                               1 / (1 + model_b_games) ** games_power)
 
-            priority = pairing_priority + model_priority + uncertainty_priority
-
+#            priority = pairing_priority + model_priority + uncertainty_priority
+            priority = game_quality + model_priority + uncertainty_priority
 
             pairs.append((
                 [rank_adjustment * priority,
-                 rank_adjustment, win_prob, joint_uncertainty,
+                 rank_adjustment, win_prob, uncertainty_priority,
                  games, model_a_games, model_b_games],
                 pair))
 
