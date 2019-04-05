@@ -52,15 +52,28 @@ std::string CleanBoardString(absl::string_view str) {
   return absl::StrJoin(SplitBoardString(str), "\n");
 }
 
-TestablePosition::TestablePosition(absl::string_view board_str, Color to_play,
-                                   int n)
-    : Position(&board_visitor, &group_visitor, to_play, n) {
+TestablePosition::TestablePosition(absl::string_view board_str, Color to_play)
+    : Position(&board_visitor, &group_visitor, to_play) {
   auto stones = ParseBoard(board_str);
   for (int i = 0; i < kN * kN; ++i) {
     if (stones[i] != Color::kEmpty) {
       AddStoneToBoard(i, stones[i]);
     }
   }
+  UpdateLegalMoves(nullptr);
+}
+
+Coord GetRandomLegalMove(const Position& position, Random* rnd) {
+  std::vector<Coord> valid_moves;
+  for (int i = 0; i < kN * kN; ++i) {
+    if (position.legal_move(i)) {
+      valid_moves.push_back(i);
+    }
+  }
+  if (valid_moves.empty()) {
+    valid_moves.push_back(Coord::kPass);
+  }
+  return valid_moves[rnd->UniformInt(0, valid_moves.size() - 1)];
 }
 
 std::array<Color, kN * kN> ParseBoard(absl::string_view str) {

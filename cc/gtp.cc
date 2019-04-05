@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <iostream>
+
 #include "absl/memory/memory.h"
 #include "absl/strings/str_cat.h"
 #include "cc/constants.h"
@@ -46,6 +48,8 @@ DEFINE_double(value_init_penalty, 0.0,
               "clamped to [-1, 1].\n"
               "0 is init-to-parent [default], 2.0 is init-to-loss.\n"
               "This behaves similiarly to leela's FPU \"First Play Urgency\".");
+DEFINE_bool(tree_reuse, true,
+            "Enable reuse of shared subtrees between consecutive moves.");
 
 // Time control flags.
 DEFINE_double(seconds_per_move, 0,
@@ -63,37 +67,54 @@ DEFINE_double(decay_factor, 0.98,
 // Inference flags.
 DEFINE_string(model, "",
               "Path to a minigo model. The format of the model depends on the "
-              "inference engine. For engine=tf, the model should be a GraphDef "
-              "proto. For engine=lite, the model should be .tflite "
-              "flatbuffer.");
+              "inference engine.");
+DEFINE_int32(cache_size_mb, 0,
+             "Size of the inference cache in MB. A value of 0 (the default) "
+             "disables the cache.");
 
 namespace minigo {
 namespace {
 
 void Gtp() {
-  GtpPlayer::Options options;
-  options.game_options.resign_threshold = FLAGS_resign_threshold;
-  options.name = absl::StrCat("minigo-", file::Basename(FLAGS_model));
-  options.ponder_limit = FLAGS_ponder_limit;
-  options.courtesy_pass = FLAGS_courtesy_pass;
-  options.inject_noise = false;
-  options.soft_pick = false;
-  options.random_symmetry = true;
-  options.value_init_penalty = FLAGS_value_init_penalty;
-  options.virtual_losses = FLAGS_virtual_losses;
-  options.num_readouts = FLAGS_num_readouts;
-  options.seconds_per_move = FLAGS_seconds_per_move;
-  options.time_limit = FLAGS_time_limit;
-  options.decay_factor = FLAGS_decay_factor;
+  Game::Options game_options;
+  game_options.resign_threshold = FLAGS_resign_threshold;
 
-  auto model_factory = NewDualNetFactory();
+  GtpPlayer::Options player_options;
+  player_options.ponder_limit = FLAGS_ponder_limit;
+  player_options.courtesy_pass = FLAGS_courtesy_pass;
+  player_options.inject_noise = false;
+  player_options.soft_pick = false;
+  player_options.random_symmetry = true;
+  player_options.value_init_penalty = FLAGS_value_init_penalty;
+  player_options.tree_reuse = FLAGS_tree_reuse;
+  player_options.virtual_losses = FLAGS_virtual_losses;
+  player_options.num_readouts = FLAGS_num_readouts;
+  player_options.seconds_per_move = FLAGS_seconds_per_move;
+  player_options.time_limit = FLAGS_time_limit;
+  player_options.decay_factor = FLAGS_decay_factor;
+
+  MG_LOG(INFO) << game_options << " " << player_options;
+
   std::unique_ptr<GtpPlayer> player;
+  auto model_desc = minigo::ParseModelDescriptor(FLAGS_model);
+  auto model_factory = NewDualNetFactory(model_desc.engine);
+  auto model = model_factory->NewDualNet(model_desc.model);
+  std::unique_ptr<BasicInferenceCache> cache;
+  if (FLAGS_cache_size_mb > 0) {
+    auto capacity = BasicInferenceCache::CalculateCapacity(FLAGS_cache_size_mb);
+    std::cerr << "Will cache up to " << capacity
+              << " inferences, using roughly " << FLAGS_cache_size_mb
+              << "MB.\n";
+    cache = absl::make_unique<BasicInferenceCache>(capacity);
+  }
+
+  Game game(model->name(), model->name(), game_options);
   if (FLAGS_minigui) {
     player = absl::make_unique<MiniguiPlayer>(
-        model_factory->NewDualNet(FLAGS_model), options);
+        std::move(model), std::move(cache), &game, player_options);
   } else {
-    player = absl::make_unique<GtpPlayer>(
-        model_factory->NewDualNet(FLAGS_model), options);
+    player = absl::make_unique<GtpPlayer>(std::move(model), std::move(cache),
+                                          &game, player_options);
   }
   player->Run();
 }

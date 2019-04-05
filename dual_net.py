@@ -23,6 +23,8 @@ import functools
 import logging
 import os.path
 import time
+import numpy as np
+import random
 
 import tensorflow as tf
 from tensorflow.contrib import summary
@@ -60,6 +62,9 @@ flags.DEFINE_multi_integer('lr_boundaries', [400000, 600000],
 
 flags.DEFINE_multi_float('lr_rates', [0.01, 0.001, 0.0001],
                          'The different learning rates')
+
+flags.DEFINE_integer('training_seed', 0,
+                     'Random seed to use for training and validation')
 
 flags.register_multi_flags_validator(
     ['lr_boundaries', 'lr_rates'],
@@ -118,6 +123,24 @@ flags.DEFINE_integer(
 flags.DEFINE_bool(
     'use_random_symmetry', True,
     help='If true random symmetries be used when doing inference.')
+
+flags.DEFINE_bool(
+    'use_SE', False,
+    help='Use Squeeze and Excitation.')
+
+flags.DEFINE_bool(
+    'use_SE_bias', False,
+    help='Use Squeeze and Excitation with bias.')
+
+flags.DEFINE_integer(
+    'SE_ratio', 2,
+    help='Squeeze and Excitation ratio.')
+
+flags.DEFINE_bool(
+    'use_swish', False,
+    help=('Use Swish activation function inplace of ReLu. '
+         'https://arxiv.org/pdf/1710.05941.pdf'))
+
 
 # TODO(seth): Verify if this is still required.
 flags.register_multi_flags_validator(
@@ -194,7 +217,9 @@ def get_inference_input():
 
 
 def model_fn(features, labels, mode, params):
-    '''
+    """
+    Create the model for estimator api
+
     Args:
         features: tensor with shape
             [BATCH_SIZE, go.N, go.N, features_lib.NEW_FEATURES_PLANES]
@@ -213,7 +238,7 @@ def model_fn(features, labels, mode, params):
         eval_metric_ops
     return dict of tensors
         logits: [BATCH_SIZE, go.N * go.N + 1]
-    '''
+    """
 
     policy_output, value_output, logits = model_inference_fn(
         features, mode == tf.estimator.ModeKeys.TRAIN, params)
@@ -246,7 +271,8 @@ def model_fn(features, labels, mode, params):
         else:
             tf.contrib.quantize.create_eval_graph()
 
-    optimizer = tf.train.MomentumOptimizer(learning_rate, params['sgd_momentum'])
+    optimizer = tf.train.MomentumOptimizer(
+        learning_rate, params['sgd_momentum'])
     if params['use_tpu']:
         optimizer = tpu_optimizer.CrossShardOptimizer(optimizer)
     with tf.control_dependencies(update_ops):
@@ -272,10 +298,13 @@ def model_fn(features, labels, mode, params):
             policy_output,
             tf.one_hot(policy_target_top_1, tf.shape(policy_output)[1]))
 
+        value_cost_normalized = value_cost / params['value_cost_weight']
+
         with tf.variable_scope("metrics"):
             metric_ops = {
                 'policy_cost': tf.metrics.mean(policy_cost),
                 'value_cost': tf.metrics.mean(value_cost),
+                'value_cost_normalized': tf.metrics.mean(value_cost_normalized),
                 'l2_cost': tf.metrics.mean(l2_cost),
                 'policy_entropy': tf.metrics.mean(policy_entropy),
                 'combined_cost': tf.metrics.mean(combined_cost),
@@ -359,7 +388,7 @@ def model_inference_fn(features, training, params):
         (policy_output, value_output, logits) tuple of tensors.
     """
 
-    my_batchn = functools.partial(
+    mg_batchn = functools.partial(
         tf.layers.batch_normalization,
         axis=-1,
         momentum=.95,
@@ -369,7 +398,7 @@ def model_inference_fn(features, training, params):
         fused=True,
         training=training)
 
-    my_conv2d = functools.partial(
+    mg_conv2d = functools.partial(
         tf.layers.conv2d,
         filters=params['conv_width'],
         kernel_size=3,
@@ -377,36 +406,87 @@ def model_inference_fn(features, training, params):
         data_format="channels_last",
         use_bias=False)
 
-    def my_res_layer(inputs):
-        int_layer1 = my_batchn(my_conv2d(inputs))
-        initial_output = tf.nn.relu(int_layer1)
-        int_layer2 = my_batchn(my_conv2d(initial_output))
-        output = tf.nn.relu(inputs + int_layer2)
+    mg_global_avgpool2d = functools.partial(
+        tf.layers.average_pooling2d,
+        pool_size=go.N,
+        strides=1,
+        padding="valid",
+        data_format="channels_last")
+
+    def mg_activation(inputs):
+        if FLAGS.use_swish:
+            return tf.nn.swish(inputs)
+
+        return tf.nn.relu(inputs)
+
+
+    def residual_inner(inputs):
+        conv_layer1 = mg_batchn(mg_conv2d(inputs))
+        initial_output = mg_activation(conv_layer1)
+        conv_layer2 = mg_batchn(mg_conv2d(initial_output))
+        return conv_layer2
+
+    def mg_res_layer(inputs):
+        residual = residual_inner(inputs)
+        output = mg_activation(inputs + residual)
         return output
 
-    initial_output = tf.nn.relu(my_batchn(my_conv2d(features)))
+    def mg_squeeze_excitation_layer(inputs):
+        # Hu, J., Shen, L., & Sun, G. (2018). Squeeze-and-Excitation Networks.
+        # 2018 IEEE/CVF Conference on Computer Vision, 7132-7141.
+        # arXiv:1709.01507 [cs.CV]
+
+        channels = params['conv_width']
+        ratio = FLAGS.SE_ratio
+        assert channels % ratio == 0
+
+        residual = residual_inner(inputs)
+        pool = mg_global_avgpool2d(residual)
+        fc1 = tf.layers.dense(pool, units=channels // ratio)
+        squeeze = mg_activation(fc1)
+
+        if FLAGS.use_SE_bias:
+            fc2 = tf.layers.dense(squeeze, units=2*channels)
+            # Channels_last so axis = 3 = -1
+            gamma, bias = tf.split(fc2, 2, axis=3)
+        else:
+            gamma = tf.layers.dense(squeeze, units=channels)
+            bias = 0
+
+        sig = tf.nn.sigmoid(gamma)
+        # Explicitly signal the broadcast.
+        scale = tf.reshape(sig, [-1, 1, 1, channels])
+
+        excitation = tf.multiply(scale, residual) + bias
+        return mg_activation(inputs + excitation)
+
+    initial_block = mg_activation(mg_batchn(mg_conv2d(features)))
 
     # the shared stack
-    shared_output = initial_output
+    shared_output = initial_block
     for _ in range(params['trunk_layers']):
-        shared_output = my_res_layer(shared_output)
+        if FLAGS.use_SE or FLAGS.use_SE_bias:
+            shared_output = mg_squeeze_excitation_layer(shared_output)
+        else:
+            shared_output = mg_res_layer(shared_output)
 
-    # policy head
-    policy_conv = my_conv2d(
+    # Policy head
+    policy_conv = mg_conv2d(
         shared_output, filters=params['policy_conv_width'], kernel_size=1)
-    policy_conv = tf.nn.relu(my_batchn(policy_conv, center=False, scale=False))
+    policy_conv = mg_activation(mg_batchn(policy_conv, center=False, scale=False))
     logits = tf.layers.dense(
-        tf.reshape(policy_conv, [-1, params['policy_conv_width'] * go.N * go.N]),
+        tf.reshape(
+            policy_conv, [-1, params['policy_conv_width'] * go.N * go.N]),
         go.N * go.N + 1)
 
     policy_output = tf.nn.softmax(logits, name='policy_output')
 
-    # value head
-    value_conv = my_conv2d(
+    # Value head
+    value_conv = mg_conv2d(
         shared_output, filters=params['value_conv_width'], kernel_size=1)
-    value_conv = tf.nn.relu(my_batchn(value_conv, center=False, scale=False))
+    value_conv = mg_activation(mg_batchn(value_conv, center=False, scale=False))
 
-    value_fc_hidden = tf.nn.relu(tf.layers.dense(
+    value_fc_hidden = mg_activation(tf.layers.dense(
         tf.reshape(value_conv, [-1, params['value_conv_width'] * go.N * go.N]),
         params['fc_width']))
     value_output = tf.nn.tanh(
@@ -443,6 +523,13 @@ def tpu_model_inference_fn(features):
             return model_inference_fn(features, False, FLAGS.flag_values_dict())
 
 
+def maybe_set_seed():
+    if FLAGS.training_seed != 0:
+        random.seed(FLAGS.training_seed)
+        tf.set_random_seed(FLAGS.training_seed)
+        np.random.seed(FLAGS.training_seed)
+
+
 def get_estimator():
     if FLAGS.use_tpu:
         return _get_tpu_estimator()
@@ -451,9 +538,12 @@ def get_estimator():
 
 
 def _get_nontpu_estimator():
+    session_config = tf.ConfigProto()
+    session_config.gpu_options.allow_growth = True
     run_config = tf.estimator.RunConfig(
         save_summary_steps=FLAGS.summary_steps,
-        keep_checkpoint_max=FLAGS.keep_checkpoint_max)
+        keep_checkpoint_max=FLAGS.keep_checkpoint_max,
+        session_config=session_config)
     return tf.estimator.Estimator(
         model_fn,
         model_dir=FLAGS.work_dir,
@@ -497,6 +587,7 @@ def bootstrap():
     # Estimator will do this automatically when you call train(), but calling
     # train() requires data, and I didn't feel like creating training data in
     # order to run the full train pipeline for 1 step.
+    maybe_set_seed()
     initial_checkpoint_name = 'model.ckpt-1'
     save_file = os.path.join(FLAGS.work_dir, initial_checkpoint_name)
     sess = tf.Session(graph=tf.Graph())

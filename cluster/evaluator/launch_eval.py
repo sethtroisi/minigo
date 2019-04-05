@@ -25,22 +25,39 @@ import fire
 import random
 from absl import flags
 import kubernetes
+from kubernetes.client.rest import ApiException
 import yaml
+<<<<<<< HEAD
+=======
+import json
+import os
+import time
+import random
+import numpy as np
+from rl_loop import fsdb
+>>>>>>> a6f9dc14406247a53d56203e08ef9c94aafce5ab
 
 from rl_loop import fsdb
 from ratings import ratings
 
+<<<<<<< HEAD
 MAX_TASKS = 300  # Keep < 500, or k8s may not track completions accurately.
 MIN_TASKS = 100
+=======
+MAX_TASKS = 150  # Keep < 500, or k8s may not track completions accurately.
+MIN_TASKS = 20
+>>>>>>> a6f9dc14406247a53d56203e08ef9c94aafce5ab
 
 
-def launch_eval_job(m1_path, m2_path, job_name, bucket_name, completions=5):
+def launch_eval_job(m1_path, m2_path, job_name,
+        bucket_name, completions=5, flags_path=None):
     """Launches an evaluator job.
     m1_path, m2_path: full gs:// paths to the .pb files to match up
     job_name: string, appended to the container, used to differentiate the job
     names (e.g. 'minigo-cc-evaluator-v5-123-v7-456')
     bucket_name: Where to write the sgfs, passed into the job as $BUCKET_NAME
     completions: the number of completions desired
+    flags_path: the path to the eval flagfile to use (if any)
     """
     if not all([m1_path, m2_path, job_name, bucket_name]):
         print("Provide all of m1_path, m2_path, job_name, and bucket_name "
@@ -58,30 +75,24 @@ def launch_eval_job(m1_path, m2_path, job_name, bucket_name, completions=5):
 
     raw_job_conf = open("cluster/evaluator/cc-evaluator.yaml").read()
 
+    if flags_path:
+        os.environ['EVAL_FLAGS_PATH'] = flags_path
+    else:
+        os.environ['EVAL_FLAGS_PATH'] = ""
     os.environ['BUCKET_NAME'] = bucket_name
-
     os.environ['MODEL_BLACK'] = m1_path
     os.environ['MODEL_WHITE'] = m2_path
-    os.environ['JOBNAME'] = job_name + '-bw'
+    os.environ['JOBNAME'] = job_name
     env_job_conf = os.path.expandvars(raw_job_conf)
 
     job_conf = yaml.load(env_job_conf)
     job_conf['spec']['completions'] = completions
 
-    resp_bw = api_instance.create_namespaced_job('default', body=job_conf)
-
-    os.environ['MODEL_WHITE'] = m1_path
-    os.environ['MODEL_BLACK'] = m2_path
-    os.environ['JOBNAME'] = job_name + '-wb'
-    env_job_conf = os.path.expandvars(raw_job_conf)
-    job_conf = yaml.load(env_job_conf)
-    job_conf['spec']['completions'] = completions
-
-    resp_wb = api_instance.create_namespaced_job('default', body=job_conf)
-    return job_conf, resp_bw, resp_wb
+    response = api_instance.create_namespaced_job('default', body=job_conf)
+    return job_conf, response
 
 
-def same_run_eval(black_num=0, white_num=0):
+def same_run_eval(black_num=0, white_num=0, completions=4):
     """Shorthand to spawn a job matching up two models from the same run,
     identified by their model number """
     if black_num <= 0 or white_num <= 0:
@@ -93,13 +104,24 @@ def same_run_eval(black_num=0, white_num=0):
 
     b_model_path = os.path.join(fsdb.models_dir(), b)
     w_model_path = os.path.join(fsdb.models_dir(), w)
+    flags_path = fsdb.eval_flags_path()
 
-    return launch_eval_job(b_model_path + ".pb",
+    obj = launch_eval_job(b_model_path + ".pb",
                            w_model_path + ".pb",
+<<<<<<< HEAD
                            "{}-{}".format(black_num, white_num),
                            flags.FLAGS.bucket_name)
+=======
+                           "{:d}-{:d}".format(black_num, white_num),
+                           bucket_name=flags.FLAGS.bucket_name,
+                           flags_path=flags_path,
+                           completions=completions)
+>>>>>>> a6f9dc14406247a53d56203e08ef9c94aafce5ab
 
+    # Fire spams the retval to stdout, so...
+    return "{} job launched ok".format(obj[1].metadata.name)
 
+<<<<<<< HEAD
 def cross_run_eval(run_a, model_a, run_b, model_b):
     """Shorthand to spawn a job matching up two models from the different run,
     identified by their bucket and model number """
@@ -130,18 +152,26 @@ def cross_run_eval(run_a, model_a, run_b, model_b):
 
 
 def _append_pairs(new_pairs, dry_run):
+=======
+
+def _append_pairs(new_pairs):
+    """ Load the pairlist, add new stuff, save it out """
+>>>>>>> a6f9dc14406247a53d56203e08ef9c94aafce5ab
     desired_pairs = restore_pairs() or []
     desired_pairs += new_pairs
     print("Adding {} new pairs, queue has {} pairs".format(len(new_pairs), len(desired_pairs)))
-    if not dry_run:
-        save_pairs(desired_pairs)
+    save_pairs(desired_pairs)
 
 
 def add_uncertain_pairs(dry_run=False):
-    new_pairs = ratings.suggest_pairs()
-    _append_pairs(new_pairs, dry_run)
+    new_pairs = ratings.suggest_pairs(ignore_before=50)
+    if dry_run:
+        print(new_pairs)
+    else:
+        _append_pairs(new_pairs)
 
 
+<<<<<<< HEAD
 
 def get_cross_eval_pairs():
     all_models = read_cross_run_models()
@@ -270,15 +300,51 @@ def get_cross_eval_pairs():
 
 
 def add_top_pairs(dry_run=False):
+=======
+def add_top_pairs(dry_run=False, pair_now=False):
+>>>>>>> a6f9dc14406247a53d56203e08ef9c94aafce5ab
     """ Pairs up the top twenty models against each other.
     #1 plays 2,3,4,5, #2 plays 3,4,5,6 etc. for a total of 15*4 matches.
+
+    Default behavior is to add the pairs to the working pairlist.
+    `pair_now` will immediately create the pairings on the cluster.
+    `dry_run` makes it only print the pairings that would be added
     """
-    top = ratings.top_n(10)
+    top = ratings.top_n(15)
     new_pairs = []
-    for idx, t in enumerate(top[:5]):
+    for idx, t in enumerate(top[:10]):
         new_pairs += [[t[0], o[0]] for o in top[idx+1:idx+5]]
-    print(new_pairs)
-    _append_pairs(new_pairs, dry_run)
+
+    if dry_run:
+        print(new_pairs)
+        return
+
+    if pair_now:
+        maybe_enqueue(new_pairs)
+    else:
+        _append_pairs(new_pairs)
+
+
+def maybe_enqueue(desired_pairs):
+    failed_pairs = []
+    while len(desired_pairs) > 0:
+        next_pair = desired_pairs.pop()  # take our pair off
+        try:
+            resp = same_run_eval(*next_pair)
+            print(resp)
+        except ApiException as err:
+            if err.status == 409: # Conflict.  Flip the order and throw it on the pile.
+                print("Conflict enqueing {}.  Continuing...".format(next_pair))
+                next_pair = [next_pair[1], next_pair[0]]
+                failed_pairs.append(next_pair)
+                random.shuffle(desired_pairs)
+            else:
+                failed_pairs.append(next_pair)
+        except:
+            failed_pairs.append(next_pair)
+            print("*** Unknown error attempting to pair {} ***".format(next_pair) )
+            raise
+    return failed_pairs
 
 
 def cross_run_eval_matchmaker_loop(sgf_dir, max_jobs=60):
@@ -326,10 +392,11 @@ def cross_run_eval_matchmaker_loop(sgf_dir, max_jobs=60):
                         desired_pairs, existing_pairs = restore_pairs()
                         print("Got {} new pairs".format(len(desired_pairs)))
                     else:
-                        print("Out of pairs!  Sleeping")
-                        time.sleep(300)
+                        print("Out of pairs.  Sleeping ({} remain)".format(len(r.items)))
+                        time.sleep(600)
                         continue
 
+<<<<<<< HEAD
                 next_pair = desired_pairs.pop()
                 print("Queue", len(desired_pairs), "items", len(existing_pairs), "previous")
                 existing_pairs.append(next_pair)
@@ -338,6 +405,16 @@ def cross_run_eval_matchmaker_loop(sgf_dir, max_jobs=60):
                 cross_run_eval(*next_pair)
                 save_pairs((desired_pairs, existing_pairs[-80:]))
                 time.sleep(6)
+=======
+
+                next_pair = desired_pairs.pop()
+                failed = maybe_enqueue([next_pair])
+                if failed != []:
+                    desired_pairs.extend(failed)
+                save_pairs(sorted(desired_pairs))
+                save_last_model(last_model)
+                time.sleep(1)
+>>>>>>> a6f9dc14406247a53d56203e08ef9c94aafce5ab
 
             else:
                 print("{}\t {} finished / {} requested. "
@@ -387,7 +464,8 @@ def cleanup(api_instance=None):
     """ Remove completed jobs from the cluster """
     api = api_instance or get_api()
     r = api.list_job_for_all_namespaces()
-    delete_opts = kubernetes.client.V1DeleteOptions()
+    delete_opts = kubernetes.client.V1DeleteOptions(
+            propagation_policy="Background")
     for job in r.items:
         if job.status.succeeded == job.spec.completions:
             print(job.metadata.name, "finished!")
@@ -404,10 +482,14 @@ def make_pairs_for_model(model_num=0):
     if model_num == 0:
         return
     pairs = []
-    pairs += [[model_num, model_num - i]
-              for i in range(1, 5) if model_num - i > 0]
-    pairs += [[model_num, model_num - i]
-              for i in range(5, 71, 10) if model_num - i > 0]
+
+    mm_fib = lambda n: int((np.matrix([[2,1],[1,1]])**(n//2))[0,(n+1)%2])
+
+    for i in range(2,14): # Max is 233
+      if mm_fib(i) >= model_num:
+        break
+      pairs += [[model_num, model_num - mm_fib(i)]]
+
     return pairs
 
 

@@ -65,7 +65,6 @@ This project assumes you have the following:
 - Python 3.5+
 - [Docker](https://docs.docker.com/install/)
 - [Cloud SDK](https://cloud.google.com/sdk/downloads)
-- Bazel v0.11 or greater
 
 The [Hitchhiker's guide to
 python](http://docs.python-guide.org/en/latest/dev/virtualenvs/) has a good
@@ -75,6 +74,16 @@ point haven't been tested in environments that are not using virtualenv.
 ```shell
 pip3 install virtualenv
 pip3 install virtualenvwrapper
+```
+
+Install Bazel
+------------------
+
+```shell
+wget https://github.com/bazelbuild/bazel/releases/download/0.19.2/bazel-0.19.2-installer-linux-x86_64.sh
+chmod 755 bazel-0.19.2-installer-linux-x86_64.sh
+sudo ./bazel-0.19.2-installer-linux-x86_64.sh
+rm bazel-0.19.2-installer-linux-x86_64.sh
 ```
 
 Install TensorFlow
@@ -87,11 +96,11 @@ pip3 install -r requirements.txt
 
 Then, you'll need to choose to install the GPU or CPU tensorflow requirements:
 
-- GPU: `pip3 install "tensorflow-gpu>=1.11,<1.12"`.
+- GPU: `pip3 install "tensorflow-gpu>=1.13,<1.14"`.
   - *Note*: You must install [CUDA
     9.0](https://developer.nvidia.com/cuda-90-download-archive). for Tensorflow
     1.5+.
-- CPU: `pip3 install "tensorflow>=1.11,<1.12"`.
+- CPU: `pip3 install "tensorflow>=1.13,<1.14"`.
 
 Setting up the Environment
 --------------------------
@@ -343,7 +352,7 @@ command.
 
 ### Validating on holdout data
 
-By default, MiniGo will hold out 5% of selfplay games for validation. This can
+By default, Minigo will hold out 5% of selfplay games for validation. This can
 be changed by adjusting the `holdout_pct` flag on the `selfplay` command.
 
 With this setup, `rl_loop/train_and_validate.py` will validate on the same

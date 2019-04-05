@@ -40,6 +40,10 @@ flags.DEFINE_integer('steps_to_train', None,
 flags.DEFINE_integer('window_size', 500000,
                      'Number of games to include in the window')
 
+flags.DEFINE_float('filter_amount', 1.0,
+                   'Fraction of positions to filter from golden chunks,'
+                   'default, 1.0 (no filter)')
+
 flags.DEFINE_string('export_path', None,
                     'Where to export the model after training.')
 
@@ -47,11 +51,15 @@ flags.DEFINE_bool('use_bt', False,
                   'Whether to use Bigtable as input.  '
                   '(Only supported with --use_tpu, currently.)')
 
+flags.DEFINE_bool('freeze', False,
+                  'Whether to freeze the graph at the end of training.')
+
 
 flags.register_multi_flags_validator(
     ['use_bt', 'use_tpu'],
     lambda flags: flags['use_tpu'] if flags['use_bt'] else True,
     '`use_bt` flag only valid with `use_tpu` as well')
+
 
 @flags.multi_flags_validator(
     ['use_bt', 'cbt_project', 'cbt_instance', 'cbt_table'],
@@ -166,7 +174,7 @@ def train(*tf_records: "Records to train on"):
             return preprocessing.get_input_tensors(
                 FLAGS.train_batch_size,
                 tf_records,
-                filter_amount=1.0,
+                filter_amount=FLAGS.filter_amount,
                 shuffle_buffer_size=FLAGS.shuffle_buffer_size,
                 random_rotation=True)
 
@@ -208,6 +216,11 @@ def main(argv):
         train(*tf_records)
     if FLAGS.export_path:
         dual_net.export_model(FLAGS.export_path)
+    if FLAGS.freeze:
+        if FLAGS.use_tpu:
+            dual_net.freeze_graph_tpu(FLAGS.export_path)
+        else:
+            dual_net.freeze_graph(FLAGS.export_path)
 
 
 if __name__ == "__main__":

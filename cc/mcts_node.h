@@ -75,6 +75,9 @@ class MctsNode {
   float Q_perspective() const {
     return position.to_play() == Color::kBlack ? Q() : -Q();
   }
+  float U_scale() const {
+    return 2.0 * (std::log((1.0f + N() + kUct_base) / kUct_base) + kUct_init);
+  }
 
   float child_N(int i) const { return edges[i].N; }
   float child_W(int i) const { return edges[i].W; }
@@ -82,7 +85,7 @@ class MctsNode {
   float child_original_P(int i) const { return edges[i].original_P; }
   float child_Q(int i) const { return child_W(i) / (1 + child_N(i)); }
   float child_U(int i) const {
-    return kPuct * std::sqrt(std::max<float>(1, N() - 1)) * child_P(i) /
+    return U_scale() * std::sqrt(std::max<float>(1, N() - 1)) * child_P(i) /
            (1 + child_N(i));
   }
 
@@ -146,13 +149,11 @@ class MctsNode {
 
   std::array<float, kNumMoves> CalculateChildActionScore() const;
 
-  bool HasPositionBeenPlayedBefore(zobrist::Hash stone_hash) const;
-
-  float CalculateSingleMoveChildActionScore(float to_play, float U_scale,
+  float CalculateSingleMoveChildActionScore(float to_play, float U_common,
                                             int i) const {
     float Q = child_Q(i);
-    float U = U_scale * child_P(i) / (1 + child_N(i));
-    return Q * to_play + U - 1000.0f * !legal_moves[i];
+    float U = U_common * child_P(i) / (1 + child_N(i));
+    return Q * to_play + U - 1000.0f * !position.legal_move(i);
   }
 
   MctsNode* MaybeAddChild(Coord c);
@@ -172,8 +173,6 @@ class MctsNode {
   uint8_t flags = 0;
 
   std::array<EdgeStats, kNumMoves> edges;
-
-  std::array<bool, kNumMoves> legal_moves;
 
   // Map from move to resulting MctsNode.
   absl::flat_hash_map<Coord, std::unique_ptr<MctsNode>> children;

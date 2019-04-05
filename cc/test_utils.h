@@ -23,6 +23,7 @@
 #include "cc/group.h"
 #include "cc/mcts_node.h"
 #include "cc/position.h"
+#include "cc/random.h"
 
 namespace minigo {
 
@@ -30,8 +31,7 @@ namespace minigo {
 // for testing purposes.
 class TestablePosition : public Position {
  public:
-  TestablePosition(absl::string_view board_str, Color to_play = Color::kBlack,
-                   int n = 0);
+  TestablePosition(absl::string_view board_str, Color to_play = Color::kBlack);
 
   using Position::PlayMove;
 
@@ -61,6 +61,10 @@ std::string CleanBoardString(absl::string_view str);
 std::array<Color, kN * kN> ParseBoard(absl::string_view str);
 
 int CountPendingVirtualLosses(const MctsNode* node);
+
+// Get a random legal move.
+// Only returns Coord::kPass if no other move is legal.
+Coord GetRandomLegalMove(const Position& position, Random* rnd);
 
 }  // namespace minigo
 

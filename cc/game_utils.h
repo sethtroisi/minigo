@@ -17,14 +17,53 @@
 
 #include <cstddef>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "absl/time/time.h"
 #include "cc/game.h"
 
 namespace minigo {
 
+// Stats about how one model won its games.
+struct WinStats {
+  struct ColorStats {
+    int both_passed = 0;
+    int opponent_resigned = 0;
+    int move_limit_reached = 0;
+
+    int total() const {
+      return both_passed + opponent_resigned + move_limit_reached;
+    }
+  };
+
+  void Update(const Game& game) {
+    auto& stats = game.result() > 0 ? black_wins : white_wins;
+    switch (game.game_over_reason()) {
+      case Game::GameOverReason::kBothPassed:
+        stats.both_passed += 1;
+        break;
+      case Game::GameOverReason::kOpponentResigned:
+        stats.opponent_resigned += 1;
+        break;
+      case Game::GameOverReason::kMoveLimitReached:
+        stats.move_limit_reached += 1;
+        break;
+    }
+  }
+
+  ColorStats black_wins;
+  ColorStats white_wins;
+};
+
+// Returns a string-formatted table of win rates & types of multiple games
+// between two players.
+std::string FormatWinStatsTable(
+    const std::vector<std::pair<std::string, WinStats>>& stats);
+
 // Returns the name (specifically the basename stem) for an output game file
-// (e.g. SGF, TF example, etc) based on the current time, hostname and game ID.
+// (e.g. SGF, TF example, etc) based on the current time, hostname, process ID
+// and game ID.
 std::string GetOutputName(absl::Time now, size_t game_id);
 
 // Writes an SGF of the given game.

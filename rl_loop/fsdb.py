@@ -43,6 +43,11 @@ flags.register_multi_flags_validator(
 
 FLAGS = flags.FLAGS
 
+def switch_base(new_base):
+    if FLAGS.base_dir:
+        FLAGS.base_dir = new_base
+    else:
+        FLAGS.bucket_name = new_base
 
 def _with_base(*args):
     def inner():
@@ -60,6 +65,7 @@ sgf_dir = _with_base('sgf')
 eval_dir = _with_base('sgf', 'eval')
 golden_chunk_dir = _with_base('data', 'golden_chunks')
 flags_path = _with_base('flags.txt')
+eval_flags_path = _with_base('eval-flags.txt')
 
 
 def get_pbs():
