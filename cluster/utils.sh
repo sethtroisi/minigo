@@ -145,7 +145,7 @@ function create_cbt_table() {
 #   CBT_INSTANCE: The Cloud Bigtable instance within PROJECT (create if absent)
 #   CBT_TABLE:  The name of the Cloud Bigtable table to create in CBT_INSTANCE
 function create_cbt_game_table() {
-check_cbt_exists
+  check_cbt_exists
   if ! (create_cbt_table ${CBT_TABLE} ); then
     return 1
   fi
