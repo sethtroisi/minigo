@@ -247,12 +247,10 @@ def sync(bt_table, model_ids, model_runs):
 
                 game_id = None
                 try:
-                    with db:
-                        c = db.cursor()
-                        c.execute("""insert into games(timestamp, filename, b_id, w_id, black_won, result)
-                                        values(?, ?, ?, ?, ?, ?)
-                        """, [timestamp, sgf_file, b_id, w_id, result.lower().startswith('b'), result])
-                        game_id = c.lastrowid
+                    c.execute("""insert into games(timestamp, filename, b_id, w_id, black_won, result)
+                                    values(?, ?, ?, ?, ?, ?)
+                    """, [timestamp, sgf_file, b_id, w_id, result.lower().startswith('b'), result])
+                    game_id = c.lastrowid
                 except sqlite3.IntegrityError:
                     # print("Duplicate game: {}".format(sgf_file))
                     continue
