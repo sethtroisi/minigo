@@ -221,7 +221,7 @@ def ingest_dirs(root, dirs):
     for d in dirs:
         if os.path.isdir(os.path.join(root, d)):
             fs = [os.path.join(root, d, f) for f in os.listdir(os.path.join(root, d))]
-            print("Importing from {}".format(d))
+            print("Importing({}) from {}/{}".format(len(fs), root,d))
             import_files(fs)
 
 
@@ -271,6 +271,7 @@ def suggest_pairs(top_n=10, per_n=3, ignore_before=300):
 
 
 def sync(root, force_all=False):
+        '''
     last_ts = last_timestamp()
     if last_ts and not force_all:
         # Build a list of days from the day before our last timestamp to today
@@ -286,6 +287,7 @@ def sync(root, force_all=False):
             subprocess.call(cmd)
         ingest_dirs(root, ds)
     else:
+        '''
         #cmd = ["gsutil", "-m", "rsync", "-r", fsdb.eval_dir(), root]
         #print(" ".join(cmd))
         #subprocess.call(cmd)
@@ -305,7 +307,7 @@ def wins_subset(bucket):
 
 def main():
     if FLAGS.sync_ratings:
-        sync("data/ratings_test/")
+        sync("data/ratings_test/eval")
     models = fsdb.get_models()
     data = wins_subset(fsdb.models_dir())
     print(len(data))

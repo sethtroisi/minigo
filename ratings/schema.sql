@@ -38,9 +38,9 @@ CREATE TABLE IF NOT EXISTS wins (
     model_winner integer not null,
     model_loser integer not null,
 
-    FOREIGN KEY(game_id) REFERENCES Games(game_id),
-    FOREIGN KEY(model_winner) REFERENCES Models(id),
-    FOREIGN KEY(model_loser) REFERENCES Models(id)
+    FOREIGN KEY(game_id) REFERENCES Games(game_id) ON DELETE CASCADE,
+    FOREIGN KEY(model_winner) REFERENCES Models(id) ON DELETE CASCADE,
+    FOREIGN KEY(model_loser) REFERENCES Models(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS games (
@@ -56,8 +56,8 @@ CREATE TABLE IF NOT EXISTS games (
   result text,
 
   UNIQUE(filename),
-  FOREIGN KEY(b_id) REFERENCES models(id),
-  FOREIGN KEY(w_id) REFERENCES models(id)
+  FOREIGN KEY(b_id) REFERENCES models(id) ON DELETE CASCADE,
+  FOREIGN KEY(w_id) REFERENCES models(id) ON DELETE CASCADE
 );
 
 
