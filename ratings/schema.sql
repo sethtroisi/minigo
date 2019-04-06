@@ -29,16 +29,18 @@ CREATE TABLE IF NOT EXISTS models (
   black_wins integer,
   white_games integer,
   white_wins integer,
-  unique(bucket, model_name)
+
+  UNIQUE(bucket, model_name)
 );
 
 CREATE TABLE IF NOT EXISTS wins (
     game_id integer primary key,
     model_winner integer not null,
     model_loser integer not null,
-    foreign key(game_id) references games(game_id),
-    foreign key(model_winner) references models(id),
-    foreign key(model_loser) references models(id)
+
+    FOREIGN KEY(game_id) REFERENCES Games(game_id),
+    FOREIGN KEY(model_winner) REFERENCES Models(id),
+    FOREIGN KEY(model_loser) REFERENCES Models(id)
 );
 
 CREATE TABLE IF NOT EXISTS games (
@@ -52,7 +54,8 @@ CREATE TABLE IF NOT EXISTS games (
 
   black_won boolean,
   result text,
-  unique(filename),
+
+  UNIQUE(filename),
   FOREIGN KEY(b_id) REFERENCES models(id),
   FOREIGN KEY(w_id) REFERENCES models(id)
 );

@@ -39,7 +39,6 @@ import sgf_wrapper
 from bigtable_input import METADATA, TABLE_STATE
 
 
-
 flags.DEFINE_string(
     'sgf_glob', None,
     'Glob for SGFs to backfill into eval_games bigtable.')
