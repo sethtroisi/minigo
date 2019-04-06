@@ -174,10 +174,8 @@ def setup_models(models_table):
 def sync(bt_table, model_ids, model_runs):
     # TODO(sethtroisi): Potentially only update from a starting rows.
 
-    bucket = "???"
-    print("Importing for bucket:", bucket)
-    new_games = 0
     status = Counter()
+    new_games = []
 
     with sqlite3.connect("cbt_ratings.db") as db:
         c = db.cursor()
@@ -222,62 +220,47 @@ def sync(bt_table, model_ids, model_runs):
             b_model_id = model_ids[(run_b, pb)]
             w_model_id = model_ids[(run_w, pw)]
 
-            """
-        new_games = []
-        new_wins = []
-        model_count_updates = defaultdict(lambda: [0,0,0,0])
-            b_model_id = model_ids[(run_b, pb)]
-            w_model_id = model_ids[(run_w, pw)]
-
             new_games.append([
                 timestamp, sgf_file,
                 b_model_id, w_model_id,
                 black_won, result
             ])
 
+        try:
+            c.executemany(
+                "insert into games values (null, ?, ?, ?, ?, ?, ?)",
+                new_games)
+            except sqlite3.IntegrityError:
+                print("Duplicate game! Bad on you")
 
-            model_count_updates[b_model_id][0] += 1
-            model_count_updates[b_model_id][1] += black_won
-            model_count_updates[w_model_id]    += [0, 0,       , 1, not black_won]
+
+            c.execute(
                 """
+                UPDATE models set num_games = 
+                  (SELECT COUNT(*) FROM wins WHERE model_winner = models.id or model_loser = models.id)
+                """)
+                
 
-            try:
-                b_id = b_model_id
-                w_id = w_model_id
 
-                game_id = None
-                try:
-                    c.execute("""insert into games(timestamp, filename, b_id, w_id, black_won, result)
-                                    values(?, ?, ?, ?, ?, ?)
-                    """, [timestamp, sgf_file, b_id, w_id, result.lower().startswith('b'), result])
-                    game_id = c.lastrowid
-                except sqlite3.IntegrityError:
-                    # print("Duplicate game: {}".format(sgf_file))
-                    continue
-
-                if game_id is None:
-                    print("Somehow, game_id was None")
-
-                # update wins/game counts on model, and wins table.
-                c.execute("update models set num_games = num_games + 1 where id in (?, ?)", [b_id, w_id])
-                if result.lower().startswith('b'):
-                    c.execute("update models set black_games = black_games + 1, black_wins = black_wins + 1 where id = ?", (b_id,))
-                    c.execute("update models set white_games = white_games + 1 where id = ?", (w_id,))
-                    c.execute("insert into wins(game_id, model_winner, model_loser) values(?, ?, ?)",
-                              [game_id, b_id, w_id])
-                elif result.lower().startswith('w'):
-                    c.execute("update models set black_games = black_games + 1 where id = ?", (b_id,))
-                    c.execute("update models set white_games = white_games + 1, white_wins = white_wins + 1 where id = ?", (w_id,))
-                    c.execute("insert into wins(game_id, model_winner, model_loser) values(?, ?, ?)",
-                              [game_id, w_id, b_id])
-                new_games += 1
-                if new_games % 1000 == 0:
-                    print("committing", new_games)
-                    db.commit()
-            except:
-                print("Bailed!")
-                db.rollback()
-                raise
+            c.execute("update models set num_games = num_games + 1 where id in (?, ?)", [b_id, w_id])
+            if result.lower().startswith('b'):
+                c.execute("update models set black_games = black_games + 1, black_wins = black_wins + 1 where id = ?", (b_id,))
+                c.execute("update models set white_games = white_games + 1 where id = ?", (w_id,))
+                c.execute("insert into wins(game_id, model_winner, model_loser) values(?, ?, ?)",
+                          [game_id, b_id, w_id])
+            elif result.lower().startswith('w'):
+                c.execute("update models set black_games = black_games + 1 where id = ?", (b_id,))
+                c.execute("update models set white_games = white_games + 1, white_wins = white_wins + 1 where id = ?", (w_id,))
+                c.execute("insert into wins(game_id, model_winner, model_loser) values(?, ?, ?)",
+                          [game_id, w_id, b_id])
+            new_games += 1
+            if new_games % 1000 == 0:
+                print("committing", new_games)
+                db.commit()
+        except:
+            print("Bailed!")
+            db.rollback()
+            raise
 
     print()
     print("Added {} new games to database".format(new_games))
