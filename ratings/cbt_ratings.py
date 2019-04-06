@@ -10,7 +10,7 @@ $ export GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=/usr/share/grpc/roots.pem
 $ sqlite3 cbt_ratings.db < ratings/schema.sql
 $ python3 ratings/cbt_ratings.py  \
     --cbt_project "$PROJECT" \
-    --cbt_instance "$CBT_INSTANCE" \
+    --cbt_instance "$CBT_INSTANCE"
 """
 
 import sys
@@ -59,7 +59,7 @@ def determine_model_id(sgf_file, pb, pw, model_runs):
     # Possible runs for white and black player.
     runs_pb = model_runs[pb]
     runs_pw = model_runs[pw]
-    assert runs_pb and runs_pw, (row_key, pb, pw)
+    assert runs_pb and runs_pw, (pb, pw)
 
     # Validation that cbt pb/pw match the filename.
     models = MODELS_FROM_FN.search(sgf_file)
@@ -69,7 +69,16 @@ def determine_model_id(sgf_file, pb, pw, model_runs):
 
     simple = CROSS_EVAL_REGEX.search(sgf_file)
     if not simple:
+        # After #812 is resolved, All cross evals should be correctly labelled
+        # as vX-XXX-vs-vZ-ZZZ so this must be an inter-run eval games.
+
+        # Check if we know from models being unique
+        if len(runs_pb & runs_pw) == 1:
+            run = min(runs_pb & runs_pw)
+            return run, run
+        print(sgf_file)
         return None
+
     run_1, num_1, run_2, num_2 = simple.groups()
 
     # We have to unravel a mystery here.
@@ -82,8 +91,8 @@ def determine_model_id(sgf_file, pb, pw, model_runs):
     # the PB/PW match only one of the runs.
 
     to_consider = {run_1, run_2}
-    runs_pb = set(runs_pb) & to_consider
-    runs_pw = set(runs_pw) & to_consider
+    runs_pb = runs_pb & to_consider
+    runs_pw = runs_pw & to_consider
     assert runs_pb and runs_pw
 
     # To simply code assume run_1 goes with pb.
@@ -130,14 +139,16 @@ def setup_models(models_table):
     """
 
     model_ids = {}
-    model_runs = defaultdict(list)
+    model_runs = defaultdict(set)
 
     with sqlite3.connect("cbt_ratings.db") as db:
-        cur = db.execute("SELECT id, model_name, bucket FROM models")
-        for model_id, model_name, run in cur.fetchall():
+        c = db.cursor()
+        cur = c.execute("SELECT id, model_name, bucket FROM models")
+        for model_id, name, run in cur.fetchall():
             assert model_id not in model_ids
-            model_ids[(run, model_name)] = model_id
-        print("Existing(db):", len(model_ids))
+            model_ids[(run, name)] = model_id
+            model_runs[name].add(run)
+        print("Existing models(db):", len(model_ids))
 
         cbt_models = 0
         new_models = []
@@ -146,124 +157,131 @@ def setup_models(models_table):
             name = row.cell_value(METADATA, b'model').decode()
             run  = row.cell_value(METADATA, b'run').decode()
             num  = int(row.cell_value(METADATA, b'model_num').decode())
-            assert run not in model_runs[name], (name, run)
-            model_runs[name].append(run)
-
             if (run, name) not in model_ids:
                 new_models.append((name, run, num))
 
-        print("Existing(cbt):", cbt_models)
+        print("Existing models(cbt):", cbt_models)
 
         if new_models:
-            print("New for db:", len(new_models))
+            print("New models insertted into db:", len(new_models))
 
-            db.executemany(
+            c.executemany(
                   """INSERT INTO models VALUES (
                   null, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, 0)""",
                   new_models)
 
             # Read from db to pick up updates
-            cur = db.execute("SELECT id, model_name, bucket FROM models")
-            for model_id, model_name, run in cur.fetchall():
-                model_ids[(run, model_name)] = model_id
-
+            cur = c.execute("SELECT id, model_name, bucket FROM models")
+            for model_id, name, run in cur.fetchall():
+                model_ids[(run, name)] = model_id
+                model_runs[name].add(run)
         assert len(model_ids) == cbt_models
+        print()
         return model_ids, model_runs
 
 
-def sync(bt_table, model_ids, model_runs):
+def sync(eval_games_table, model_ids, model_runs):
     # TODO(sethtroisi): Potentially only update from a starting rows.
 
     status = Counter()
-    new_games = []
+    game_records = []
+
+    reader = tqdm(eval_games_table.read_rows(), desc="eval_game", unit=" rows")
+    for r_i, row in enumerate(reader):
+        row_key = row.row_key
+
+        if row_key == b'table_state':
+          continue
+
+        sgf_file = row.cell_value(METADATA, b'sgf').decode()
+        timestamp = sgf_file.split('-')[0]
+        pb = row.cell_value(METADATA, b'black').decode()
+        pw = row.cell_value(METADATA, b'white').decode()
+        result = row.cell_value(METADATA, b'result').decode()
+        black_won = result.lower().startswith('b')
+
+        assert pw and pb and result, row_key
+
+        # TODO remove before commiting.
+        if sgf_file.startswith('v'):
+            continue
+
+        # TODO(sethtroisi): At somepoint it would be nice to store this
+        # during evaluation and backfill cbt.
+
+        # NOTE: model_names (000123-brave) may be duplicated between runs
+        # see 000588-anchorite in v9 and v10.
+
+        if '-v7-' in sgf_file or '-v9-' in sgf_file:
+            # very old
+            status['old runs'] += 1
+            continue
+
+        status['considered'] += 1
+
+        test = determine_model_id(sgf_file, pb, pw, model_runs)
+        if test is None:
+            status['determine failed'] += 1
+            continue
+
+        run_b, run_w = test
+        b_model_id = model_ids[(run_b, pb)]
+        w_model_id = model_ids[(run_w, pw)]
+
+        game_records.append([
+            timestamp, sgf_file,
+            b_model_id, w_model_id,
+            black_won, result
+        ])
+    print()
 
     with sqlite3.connect("cbt_ratings.db") as db:
         c = db.cursor()
-        for r_i, row in enumerate(tqdm(bt_table.read_rows())):
-            row_key = row.row_key
 
-            if row_key == b'table_state':
-              continue
+        c.executemany(
+            "INSERT OR IGNORE INTO games VALUES (null, ?, ?, ?, ?, ?, ?)",
+            game_records)
 
-            sgf_file = row.cell_value(METADATA, b'sgf').decode()
-            timestamp = sgf_file.split('-')[0]
-            pb = row.cell_value(METADATA, b'black').decode()
-            pw = row.cell_value(METADATA, b'white').decode()
-            result = row.cell_value(METADATA, b'result').decode()
-            black_won = result.lower().startswith('b')
+        inserted = c.rowcount
+        if inserted > 0:
+            print("Inserted {} new games from {} rows".format(
+                inserted, len(game_records)))
 
-            assert pw and pb and result, row_key
+        c.executescript("""
+            DELETE FROM wins;
+            INSERT INTO wins
+                SELECT game_id, b_id, w_id FROM games WHERE black_won
+                UNION
+                SELECT game_id, w_id, b_id FROM games WHERE NOT black_won;
+        """)
+        print("Wins({}) updated".format(c.rowcount))
 
-            # TODO remove before commiting.
-            if sgf_file.startswith('v'):
-                continue
+        # Do all the calculations here with maps instead of in SQL
+        # num_games, num_wins, black_games, black_wins, white_games, white_wins
+        model_stats = defaultdict(lambda: [0,0,0,0,0,0])
 
-            # TODO(sethtroisi): At somepoint it would be nice to store this
-            # during evaluation and backfill cbt.
+        cur = c.execute("select b_id, w_id, black_won from games")
+        for b_id, w_id, black_won in cur.fetchall():
+            model_stats[b_id][0] += 1
+            model_stats[b_id][1] += black_won
+            model_stats[b_id][2] += 1
+            model_stats[b_id][3] += black_won
 
-            # NOTE: model_names (000123-brave) may be duplicated between runs
-            # see 000588-anchorite in v9 and v10.
+            model_stats[w_id][0] += 1
+            model_stats[w_id][1] += not black_won
+            model_stats[w_id][4] += 1
+            model_stats[w_id][5] += not black_won
 
-            if '-v7-' in sgf_file or '-v9-' in sgf_file:
-                # very old
-                status['old runs'] += 1
-                continue
+        c.executemany("""
+            UPDATE models set
+                num_games = ?, num_wins = ?,
+                black_games = ?, black_wins = ?,
+                white_games = ?, white_wins = ?
+            WHERE id = ?
+            """,
+            (tuple(stats) + (m_id,) for m_id, stats in model_stats.items()))
+        print("Models({}) updated".format(c.rowcount))
 
-            status['considered'] += 1
-
-            test = determine_model_id(sgf_file, pb, pw, model_runs)
-            if test is None:
-                status['determine failed'] += 1
-                continue
-
-            run_b, run_w = test
-            b_model_id = model_ids[(run_b, pb)]
-            w_model_id = model_ids[(run_w, pw)]
-
-            new_games.append([
-                timestamp, sgf_file,
-                b_model_id, w_model_id,
-                black_won, result
-            ])
-
-        try:
-            c.executemany(
-                "insert into games values (null, ?, ?, ?, ?, ?, ?)",
-                new_games)
-            except sqlite3.IntegrityError:
-                print("Duplicate game! Bad on you")
-
-
-            c.execute(
-                """
-                UPDATE models set num_games = 
-                  (SELECT COUNT(*) FROM wins WHERE model_winner = models.id or model_loser = models.id)
-                """)
-                
-
-
-            c.execute("update models set num_games = num_games + 1 where id in (?, ?)", [b_id, w_id])
-            if result.lower().startswith('b'):
-                c.execute("update models set black_games = black_games + 1, black_wins = black_wins + 1 where id = ?", (b_id,))
-                c.execute("update models set white_games = white_games + 1 where id = ?", (w_id,))
-                c.execute("insert into wins(game_id, model_winner, model_loser) values(?, ?, ?)",
-                          [game_id, b_id, w_id])
-            elif result.lower().startswith('w'):
-                c.execute("update models set black_games = black_games + 1 where id = ?", (b_id,))
-                c.execute("update models set white_games = white_games + 1, white_wins = white_wins + 1 where id = ?", (w_id,))
-                c.execute("insert into wins(game_id, model_winner, model_loser) values(?, ?, ?)",
-                          [game_id, w_id, b_id])
-            new_games += 1
-            if new_games % 1000 == 0:
-                print("committing", new_games)
-                db.commit()
-        except:
-            print("Bailed!")
-            db.rollback()
-            raise
-
-    print()
-    print("Added {} new games to database".format(new_games))
     print()
     for s, count in status.most_common():
         print("{:<10}".format(count),s )
@@ -357,7 +375,7 @@ def main():
     for v, k in sorted([(v, k) for k, v in r.items()])[-20:][::-1]:
         print(models[model_num_for(k)][1], v)
     db = sqlite3.connect("ratings.db")
-    print(db.execute("select count(*) from wins").fetchone()[0], "games")
+    #print(db.execute("select count(*) from wins").fetchone()[0], "games")
     for m in models[-10:]:
         m_id = model_id(m[0])
         if m_id in r:

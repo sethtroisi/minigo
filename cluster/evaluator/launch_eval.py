@@ -17,36 +17,23 @@ sys.path.insert(0, '.')
 
 import json
 import os
+import random
 import re
 import time
 from collections import Counter
 
 import fire
-import random
-from absl import flags
 import kubernetes
-from kubernetes.client.rest import ApiException
-import yaml
-<<<<<<< HEAD
-=======
-import json
-import os
-import time
-import random
 import numpy as np
-from rl_loop import fsdb
->>>>>>> a6f9dc14406247a53d56203e08ef9c94aafce5ab
+import yaml
+from absl import flags
+from kubernetes.client.rest import ApiException
 
 from rl_loop import fsdb
 from ratings import ratings
 
-<<<<<<< HEAD
-MAX_TASKS = 300  # Keep < 500, or k8s may not track completions accurately.
-MIN_TASKS = 100
-=======
 MAX_TASKS = 150  # Keep < 500, or k8s may not track completions accurately.
 MIN_TASKS = 20
->>>>>>> a6f9dc14406247a53d56203e08ef9c94aafce5ab
 
 
 def launch_eval_job(m1_path, m2_path, job_name,
@@ -108,20 +95,14 @@ def same_run_eval(black_num=0, white_num=0, completions=4):
 
     obj = launch_eval_job(b_model_path + ".pb",
                            w_model_path + ".pb",
-<<<<<<< HEAD
-                           "{}-{}".format(black_num, white_num),
-                           flags.FLAGS.bucket_name)
-=======
                            "{:d}-{:d}".format(black_num, white_num),
                            bucket_name=flags.FLAGS.bucket_name,
                            flags_path=flags_path,
                            completions=completions)
->>>>>>> a6f9dc14406247a53d56203e08ef9c94aafce5ab
 
     # Fire spams the retval to stdout, so...
     return "{} job launched ok".format(obj[1].metadata.name)
 
-<<<<<<< HEAD
 def cross_run_eval(run_a, model_a, run_b, model_b):
     """Shorthand to spawn a job matching up two models from the different run,
     identified by their bucket and model number """
@@ -151,12 +132,8 @@ def cross_run_eval(run_a, model_a, run_b, model_b):
     return launch_eval_job(path_a, path_b, tag, cross_eval_bucket, 5)
 
 
-def _append_pairs(new_pairs, dry_run):
-=======
-
 def _append_pairs(new_pairs):
     """ Load the pairlist, add new stuff, save it out """
->>>>>>> a6f9dc14406247a53d56203e08ef9c94aafce5ab
     desired_pairs = restore_pairs() or []
     desired_pairs += new_pairs
     print("Adding {} new pairs, queue has {} pairs".format(len(new_pairs), len(desired_pairs)))
@@ -170,8 +147,6 @@ def add_uncertain_pairs(dry_run=False):
     else:
         _append_pairs(new_pairs)
 
-
-<<<<<<< HEAD
 
 def get_cross_eval_pairs():
     all_models = read_cross_run_models()
@@ -299,10 +274,7 @@ def get_cross_eval_pairs():
 
 
 
-def add_top_pairs(dry_run=False):
-=======
 def add_top_pairs(dry_run=False, pair_now=False):
->>>>>>> a6f9dc14406247a53d56203e08ef9c94aafce5ab
     """ Pairs up the top twenty models against each other.
     #1 plays 2,3,4,5, #2 plays 3,4,5,6 etc. for a total of 15*4 matches.
 

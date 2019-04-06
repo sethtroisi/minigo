@@ -38,9 +38,9 @@ CREATE TABLE IF NOT EXISTS wins (
     model_winner integer not null,
     model_loser integer not null,
 
-    FOREIGN KEY(game_id) REFERENCES Games(game_id) ON DELETE CASCADE,
-    FOREIGN KEY(model_winner) REFERENCES Models(id) ON DELETE CASCADE,
-    FOREIGN KEY(model_loser) REFERENCES Models(id) ON DELETE CASCADE
+    FOREIGN KEY(game_id) REFERENCES games(game_id) ON DELETE CASCADE,
+    FOREIGN KEY(model_winner) REFERENCES models(id) ON DELETE CASCADE,
+    FOREIGN KEY(model_loser) REFERENCES models(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS games (
@@ -64,4 +64,6 @@ CREATE TABLE IF NOT EXISTS games (
 CREATE INDEX IF NOT EXISTS model_name_bucket_index ON models (model_name, bucket);
 CREATE INDEX IF NOT EXISTS game_model_b_index ON games (b_id);
 CREATE INDEX IF NOT EXISTS game_model_w_index ON games (w_id);
-CREATE INDEX IF NOT EXISTS game_filename on games (filename);
+CREATE INDEX IF NOT EXISTS game_filename_index on games (filename);
+CREATE INDEX IF NOT EXISTS win_winner_index on wins (model_winner);
+CREATE INDEX IF NOT EXISTS win_loser_index on wins (model_loser);
