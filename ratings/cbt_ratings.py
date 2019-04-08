@@ -47,6 +47,8 @@ from bigtable_input import METADATA, TABLE_STATE
 
 FLAGS = flags.FLAGS
 
+flags.DEFINE_bool('sync_ratings', False, 'Synchronize files before computing ratings.')
+
 flags.mark_flags_as_required([
     "cbt_project", "cbt_instance"
 ])
@@ -88,6 +90,7 @@ def determine_model_id(sgf_file, pb, pw, model_runs):
         # as vX-XXX-vs-vZ-ZZZ so this must be an inter-run eval games.
 
         # Check if both models (num + name) are unique to a single run.
+        return None
         if len(runs_pb & runs_pw) == 1:
             run = min(runs_pb & runs_pw)
             return run, run
@@ -147,6 +150,25 @@ def determine_model_id(sgf_file, pb, pw, model_runs):
     return run_1, run_2
 
 
+def read_models(db):
+    """
+    Read model names and runs from db.
+
+    Returns:
+      {(<run>,<model_name>): db_model_id}, {model_name: [run_a, run_b]}
+    """
+    model_ids = {}
+    model_runs = defaultdict(set)
+
+    cur = db.execute("SELECT id, model_name, bucket FROM models")
+    for model_id, name, run in cur.fetchall():
+        assert model_id not in model_ids
+        model_ids[(run, name)] = model_id
+        model_runs[name].add(run)
+
+    return model_ids, model_runs
+
+
 def setup_models(models_table):
     """
     Read all (~10k) models from cbt and db
@@ -156,17 +178,8 @@ def setup_models(models_table):
       {(<run>,<model_name>): db_model_id}, {model_name: [run_a, run_b]}
     """
 
-    model_ids = {}
-    model_runs = defaultdict(set)
-
     with sqlite3.connect("cbt_ratings.db") as db:
-        c = db.cursor()
-        cur = c.execute("SELECT id, model_name, bucket FROM models")
-        for model_id, name, run in cur.fetchall():
-            assert model_id not in model_ids
-            model_ids[(run, name)] = model_id
-            model_runs[name].add(run)
-        print("Existing models(db):", len(model_ids))
+        model_ids, model_runs = read_models(db)
 
         cbt_models = 0
         new_models = []
@@ -183,16 +196,14 @@ def setup_models(models_table):
         if new_models:
             print("New models insertted into db:", len(new_models))
 
-            c.executemany(
+            db.executemany(
                   """INSERT INTO models VALUES (
                   null, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, 0)""",
                   new_models)
 
             # Read from db to pick up new model_ids.
-            cur = c.execute("SELECT id, model_name, bucket FROM models")
-            for model_id, name, run in cur.fetchall():
-                model_ids[(run, name)] = model_id
-                model_runs[name].add(run)
+            model_ids, model_runs = read_models(db)
+
         assert len(model_ids) == cbt_models
         print()
         return model_ids, model_runs
@@ -222,11 +233,6 @@ def sync(eval_games_table, model_ids, model_runs):
 
         # TODO remove before commiting.
         if sgf_file.startswith('v'):
-            continue
-
-        if '-v7-' in sgf_file or '-v9-' in sgf_file:
-            # very old
-            status['old runs'] += 1
             continue
 
         status['considered'] += 1
@@ -350,52 +356,76 @@ def compute_ratings(data=None):
 
 
 def top_n(n=10):
-    data = wins_subset(fsdb.models_dir())
+    data = wins_subset()
     r = compute_ratings(data)
     return [(model_num_for(k), v) for v, k in
             sorted([(v, k) for k, v in r.items()])[-n:][::-1]]
 
 
-def wins_subset(bucket):
+def wins_subset(run=None):
     with sqlite3.connect('cbt_ratings.db') as db:
-        data = db.execute(
-            "select model_winner, model_loser from wins "
-            "join models where "
-            "    models.bucket = ? AND "
-            "    model_winner = models.id",
-            (bucket,)).fetchall()
-    return data
+        if run:
+            data = db.execute(
+                """
+                select model_winner, model_loser from wins
+                join models m1 join models m2 where
+                    m1.bucket = ? AND m1.id = model_winner
+                    m2.bucket = ? AND m2.id = model_loser
+                """,
+                (run,run))
+        else:
+            # No run is for cross eval, don't allow games from same run
+            data = db.execute("""
+                select model_winner, model_loser from wins
+""")
+#                join models m1 join models m2 where
+#                    m1.id = model_winner AND
+#                    m2.id = model_loser AND
+#                    m1.bucket != m2.bucket
+#                """)
+
+    return data.fetchall()
 
 
 def main():
-    # TODO(djk): table.exists() without admin=True, read_only=False.
-    models_table = (bigtable
-                .Client(FLAGS.cbt_project, read_only=True)
-                .instance(FLAGS.cbt_instance)
-                .table("models"))
+    if FLAGS.sync_ratings:
+        # TODO(djk): table.exists() without admin=True, read_only=False.
+        models_table = (bigtable
+                    .Client(FLAGS.cbt_project, read_only=True)
+                    .instance(FLAGS.cbt_instance)
+                    .table("models"))
 
-    eval_games_table = (bigtable
-                .Client(FLAGS.cbt_project, read_only=True)
-                .instance(FLAGS.cbt_instance)
-                .table("eval_games"))
+        eval_games_table = (bigtable
+                    .Client(FLAGS.cbt_project, read_only=True)
+                    .instance(FLAGS.cbt_instance)
+                    .table("eval_games"))
 
-    #model_ids, model_runs = setup_models(models_table)
-    #sync(eval_games_table, model_ids, model_runs)
-    #return
+        model_ids, model_runs = setup_models(models_table)
+        sync(eval_games_table, model_ids, model_runs)
+    else:
+        with sqlite3.connect('cbt_ratings.db') as db:
+            model_ids, model_runs = read_models(db)
 
-    data = wins_subset(fsdb.models_dir())
-    print(len(data))
-    r = compute_ratings(data)
-    for v, k in sorted([(v, k) for k, v in r.items()])[-20:][::-1]:
-        print(models[model_num_for(k)][1], v)
+    data = wins_subset()
+    print("DB has", len(data), "games")
+    if not data:
+        return
 
-    #for m in models[-10:]:
-    #    m_id = model_id(m[0])
-    #    if m_id in r:
-    #        rat, sigma = r[m_id]
-    #        print("{:>30}:  {:.2f} ({:.3f})".format(m[1], rat, sigma))
-    #    else:
-    #        print("{}, Model id not found({})".format(m[1], m_id))
+    ratings = compute_ratings(data)
+    for v, k in sorted([(v, k) for k, v in ratings.items()], reverse=True)[:20]:
+        print(k, v)
+
+    # choose most recent run
+    run = max(r for r, m in model_ids)
+    print()
+    print("Recent ratings for", run)
+    for m in sorted(m for r, m in model_ids if r == run)[-20:]:
+        m_id = model_ids[(run, m)]
+        if m_id in ratings:
+            rating, sigma = ratings[m_id]
+            print("{:>30}:  {:.2f} ({:.3f})".format(m, rating, sigma))
+        else:
+            print("{:>30}:  ({}) not found".format(m, m_id))
 
 
 if __name__ == '__main__':

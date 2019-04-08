@@ -308,14 +308,16 @@ def wins_subset(bucket):
 def main():
     if FLAGS.sync_ratings:
         sync("data/ratings_test/eval")
+
     models = fsdb.get_models()
     data = wins_subset(fsdb.models_dir())
-    print(len(data))
+    print("win subset", len(data))
     r = compute_ratings(data)
     for v, k in sorted([(v, k) for k, v in r.items()])[-20:][::-1]:
-        print(model_num_for(k), v)
+        print("Top model", model_num_for(k), v)
+
     db = sqlite3.connect("ratings.db")
-    print(db.execute("select count(*) from wins").fetchone()[0], "games")
+    print("db has", db.execute("select count(*) from wins").fetchone()[0], "games")
     for m in models[-10:]:
         m_id = model_id(m[0])
         if m_id in r:
