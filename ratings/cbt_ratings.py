@@ -1,8 +1,23 @@
-### TODO header
-"""
+# Copyright 2018 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+"""
+Get local database of eval games from using Google Cloud Bigtable as
+the source of truth.
 
 Inspiration from Seth's experience with CloudyGo db.
+Replaced the much slower and clunkier ratings.py
 
 Usage:
 
@@ -40,6 +55,7 @@ MODEL_REGEX = re.compile("(\d*)-(.*)")
 CROSS_EVAL_REGEX = re.compile("(v\d+)-(\d+)-vs-(v\d+)-(\d+)")
 MODELS_FROM_FN = re.compile("(\d{6}-[a-z-]+)-(\d{6}-[a-z-]+)$")
 
+
 def assert_pair_matches(pb, pw, m1, m2, sgf_file):
     if pb == m1 and pw == m2:
         return False
@@ -48,20 +64,19 @@ def assert_pair_matches(pb, pw, m1, m2, sgf_file):
     assert False, ((pb, pw), (m1, m2), sgf_file)
 
 
-
 def determine_model_id(sgf_file, pb, pw, model_runs):
     """Determine which run+model PB and PW are."""
 
-    # Remove leading zeros
+    # Get number ("123") of model with no leading zeros.
     num_b = str(int(pb.split('-')[0]))
     num_w = str(int(pw.split('-')[0]))
 
-    # Possible runs for white and black player.
+    # Possible runs for black and white player.
     runs_pb = model_runs[pb]
     runs_pw = model_runs[pw]
     assert runs_pb and runs_pw, (pb, pw)
 
-    # Validation that cbt pb/pw match the filename.
+    # Validation that pb/pw (from cbt) match the filename.
     models = MODELS_FROM_FN.search(sgf_file)
     assert models, sgf_file
     m_1, m_2 = models.groups()
@@ -72,7 +87,7 @@ def determine_model_id(sgf_file, pb, pw, model_runs):
         # After #812 is resolved, All cross evals should be correctly labelled
         # as vX-XXX-vs-vZ-ZZZ so this must be an inter-run eval games.
 
-        # Check if we know from models being unique
+        # Check if both models (num + name) are unique to a single run.
         if len(runs_pb & runs_pw) == 1:
             run = min(runs_pb & runs_pw)
             return run, run
@@ -82,13 +97,15 @@ def determine_model_id(sgf_file, pb, pw, model_runs):
     run_1, num_1, run_2, num_2 = simple.groups()
 
     # We have to unravel a mystery here.
-    # The file name tells up which number <=> run
-    # The file name also tells us model_name (model_number + model_name)
-    # pb,pw are model_name from PB[] and PW[].
+    # filename tells up which number goes with which run,
+    # filename also tells us model_name (number + ame),
+    # And pb,pw are model_name from PB[] and PW[].
     #
-    # The easy case is num_1 != num_2, PB tells us model_number tells us run
-    # The hard case is num_1 == num_2, this requires us checking if
-    # the PB/PW match only one of the runs.
+    # The easy case is num_1 != num_2:
+    #      int(PB) => model_number which identifies PB run (same for PW)
+    # The hard case is num_1 == num_2:
+    #       this requires us checking if either PB/PW's model number + name
+    #       is unique to only one of the two runs.
 
     to_consider = {run_1, run_2}
     runs_pb = runs_pb & to_consider
@@ -122,8 +139,9 @@ def determine_model_id(sgf_file, pb, pw, model_runs):
     assert num_w == num_2 and run_2 in runs_pw
 
     # Verify the inverse isn't also valid.
-    assert num_b == num_1 and run_1 in runs_pb
-    assert num_w == num_2 and run_2 in runs_pw
+    assert not (run_1 != run_2 and
+                num_b != num_2 and run_2 in runs_pb and
+                num_w != num_1 and run_1 in runs_pw), sgf_file
 
     # (run_b, run_b)
     return run_1, run_2
@@ -132,7 +150,7 @@ def determine_model_id(sgf_file, pb, pw, model_runs):
 def setup_models(models_table):
     """
     Read all (~10k) models from cbt and db
-    Merge and write and new models to db.
+    Merge both lists and write any new models to db.
 
     Returns:
       {(<run>,<model_name>): db_model_id}, {model_name: [run_a, run_b]}
@@ -170,7 +188,7 @@ def setup_models(models_table):
                   null, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, 0)""",
                   new_models)
 
-            # Read from db to pick up updates
+            # Read from db to pick up new model_ids.
             cur = c.execute("SELECT id, model_name, bucket FROM models")
             for model_id, name, run in cur.fetchall():
                 model_ids[(run, name)] = model_id
@@ -206,18 +224,15 @@ def sync(eval_games_table, model_ids, model_runs):
         if sgf_file.startswith('v'):
             continue
 
-        # TODO(sethtroisi): At somepoint it would be nice to store this
-        # during evaluation and backfill cbt.
-
-        # NOTE: model_names (000123-brave) may be duplicated between runs
-        # see 000588-anchorite in v9 and v10.
-
         if '-v7-' in sgf_file or '-v9-' in sgf_file:
             # very old
             status['old runs'] += 1
             continue
 
         status['considered'] += 1
+
+        # TODO(sethtroisi): At somepoint it would be nice to store this
+        # during evaluation and backfill cbt.
 
         test = determine_model_id(sgf_file, pb, pw, model_runs)
         if test is None:
@@ -233,11 +248,12 @@ def sync(eval_games_table, model_ids, model_runs):
             b_model_id, w_model_id,
             black_won, result
         ])
-    print()
 
+    print()
     with sqlite3.connect("cbt_ratings.db") as db:
         c = db.cursor()
 
+        # Most of these games will not be new.
         c.executemany(
             "INSERT OR IGNORE INTO games VALUES (null, ?, ?, ?, ?, ?, ?)",
             game_records)
@@ -256,7 +272,7 @@ def sync(eval_games_table, model_ids, model_runs):
         """)
         print("Wins({}) updated".format(c.rowcount))
 
-        # Do all the calculations here with maps instead of in SQL
+        # Do all the calculations here with maps instead of in SQL.
         # num_games, num_wins, black_games, black_wins, white_games, white_wins
         model_stats = defaultdict(lambda: [0,0,0,0,0,0])
 
@@ -352,37 +368,34 @@ def wins_subset(bucket):
 
 
 def main():
-    # bt_table =  bigtable.Client("tensor-go",  admin=True).instance("minigo-instance").table("eval_games")
+    # TODO(djk): table.exists() without admin=True, read_only=False.
     models_table = (bigtable
                 .Client(FLAGS.cbt_project, read_only=True)
                 .instance(FLAGS.cbt_instance)
                 .table("models"))
-    # TODO(djk): exists without admin=True, read_only=False
 
     eval_games_table = (bigtable
                 .Client(FLAGS.cbt_project, read_only=True)
                 .instance(FLAGS.cbt_instance)
                 .table("eval_games"))
 
-    model_ids, model_runs = setup_models(models_table)
-
-    sync(eval_games_table, model_ids, model_runs)
-    return
+    #model_ids, model_runs = setup_models(models_table)
+    #sync(eval_games_table, model_ids, model_runs)
+    #return
 
     data = wins_subset(fsdb.models_dir())
     print(len(data))
     r = compute_ratings(data)
     for v, k in sorted([(v, k) for k, v in r.items()])[-20:][::-1]:
         print(models[model_num_for(k)][1], v)
-    db = sqlite3.connect("ratings.db")
-    #print(db.execute("select count(*) from wins").fetchone()[0], "games")
-    for m in models[-10:]:
-        m_id = model_id(m[0])
-        if m_id in r:
-            rat, sigma = r[m_id]
-            print("{:>30}:  {:.2f} ({:.3f})".format(m[1], rat, sigma))
-        else:
-            print("{}, Model id not found({})".format(m[1], m_id))
+
+    #for m in models[-10:]:
+    #    m_id = model_id(m[0])
+    #    if m_id in r:
+    #        rat, sigma = r[m_id]
+    #        print("{:>30}:  {:.2f} ({:.3f})".format(m[1], rat, sigma))
+    #    else:
+    #        print("{}, Model id not found({})".format(m[1], m_id))
 
 
 if __name__ == '__main__':
