@@ -377,12 +377,11 @@ def wins_subset(run=None):
             # No run is for cross eval, don't allow games from same run
             data = db.execute("""
                 select model_winner, model_loser from wins
-""")
-#                join models m1 join models m2 where
-#                    m1.id = model_winner AND
-#                    m2.id = model_loser AND
-#                    m1.bucket != m2.bucket
-#                """)
+                join models m1 join models m2 where
+                    m1.id = model_winner AND
+                    m2.id = model_loser AND
+                    m1.bucket != m2.bucket
+                """)
 
     return data.fetchall()
 
