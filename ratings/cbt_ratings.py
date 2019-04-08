@@ -377,6 +377,8 @@ def wins_subset(run=None):
             # No run is for cross eval, don't allow games from same run
             data = db.execute("""
                 select model_winner, model_loser from wins
+#                """)
+                ("""
                 join models m1 join models m2 where
                     m1.id = model_winner AND
                     m2.id = model_loser AND
@@ -412,10 +414,10 @@ def main():
 
     ratings = compute_ratings(data)
     for v, k in sorted([(v, k) for k, v in ratings.items()], reverse=True)[:20]:
-        print(k, v)
+        print("Top model({}) {}: {}".format(k, k, v))
 
-    # choose most recent run
-    run = max(r for r, m in model_ids)
+    # Stats on recent models
+    run = 'v' + str(max(int(r[1:]) for r, m in model_ids))
     print()
     print("Recent ratings for", run)
     for m in sorted(m for r, m in model_ids if r == run)[-20:]:

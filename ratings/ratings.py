@@ -314,7 +314,7 @@ def main():
     print("win subset", len(data))
     r = compute_ratings(data)
     for v, k in sorted([(v, k) for k, v in r.items()])[-20:][::-1]:
-        print("Top model", model_num_for(k), v)
+        print("Top model({}) {}: {}".format(k, model_num_for(k), v))
 
     db = sqlite3.connect("ratings.db")
     print("db has", db.execute("select count(*) from wins").fetchone()[0], "games")

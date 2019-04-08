@@ -5,7 +5,7 @@ import re
 
 bt_table =  bigtable.Client("tensor-go",  admin=True).instance("minigo-instance").table("eval_games")
 
-BAD_NAME = re.compile("[a-z][0-9]{6}-[a-z-]*$")
+BAD_NAME = re.compile("-v16-16-")
 count = 0
 
 rows = bt_table.read_rows(
@@ -21,6 +21,6 @@ for row in tqdm(rows):
   if match:
     count += 1
     print(count, row.row_key, sgf)
-    update = bt_table.row(row.row_key)
- #   update.delete()
- #   update.commit()
+#    update = bt_table.row(row.row_key)
+#    update.delete()
+#    update.commit()
