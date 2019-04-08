@@ -368,7 +368,6 @@ def cross_run_eval_matchmaker_loop(sgf_dir, max_jobs=60):
                         time.sleep(600)
                         continue
 
-<<<<<<< HEAD
                 next_pair = desired_pairs.pop()
                 print("Queue", len(desired_pairs), "items", len(existing_pairs), "previous")
                 existing_pairs.append(next_pair)
@@ -377,16 +376,6 @@ def cross_run_eval_matchmaker_loop(sgf_dir, max_jobs=60):
                 cross_run_eval(*next_pair)
                 save_pairs((desired_pairs, existing_pairs[-80:]))
                 time.sleep(6)
-=======
-
-                next_pair = desired_pairs.pop()
-                failed = maybe_enqueue([next_pair])
-                if failed != []:
-                    desired_pairs.extend(failed)
-                save_pairs(sorted(desired_pairs))
-                save_last_model(last_model)
-                time.sleep(1)
->>>>>>> a6f9dc14406247a53d56203e08ef9c94aafce5ab
 
             else:
                 print("{}\t {} finished / {} requested. "
