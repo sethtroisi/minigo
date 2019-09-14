@@ -138,6 +138,12 @@ class GroupVisitor {
 // instances of the Position class.
 class Position {
  public:
+  using Stones = std::array<Stone, kN * kN>;
+
+  // Calculates the Zobrist hash for an array of stones. Prefer using
+  // Position::stone_hash() if possible.
+  static zobrist::Hash CalculateStoneHash(const Stones& stones);
+
   // Interface used to enforce positional superko based on the Zobrist hash of
   // a position.
   class ZobristHistory {
@@ -157,8 +163,6 @@ class Position {
   Position(const Position&) = default;
   Position& operator=(const Position&) = default;
 
-  using Stones = std::array<Stone, kN * kN>;
-
   // Plays the given move and updates which moves are legal.
   // If zobrist_history is non-null, move legality considers positional superko.
   // If zobrist_history is null, positional superko is not considered when
@@ -166,11 +170,32 @@ class Position {
   void PlayMove(Coord c, Color color = Color::kEmpty,
                 ZobristHistory* zobrist_history = nullptr);
 
+  // TODO(tommadams): Do we really need to store this on the position? Return
+  // the number of captured stones from AddStoneToBoard and track the number of
+  // captures in the player.
   const std::array<int, 2>& num_captures() const { return num_captures_; }
 
   // Calculates the score from B perspective. If W is winning, score is
   // negative.
   float CalculateScore(float komi);
+
+  // Calculates all pass-alive region that are enclosed by groups of `color`
+  // stones.
+  // Elements in the returned array are set to `Color::kBlack` or
+  // `Color::kWhite` if they belong to a pass-alive region or `Color::kEmpty`
+  // otherwise. Only intersections inside the enclosed region are set,
+  // intersections that are part of an enclosing group are set to
+  // `Color::kEmpty`. Concretely, given the following position:
+  //   X . X . O X .
+  //   X X X X X X .
+  //   . . . . . . .
+  // The returned array will be set to:
+  //   . X . X X . .
+  //   . . . . . . .
+  std::array<Color, kN * kN> CalculatePassAliveRegions() const;
+
+  // Returns true if the whole board is pass-alive.
+  bool CalculateWholeBoardPassAlive() const;
 
   // Returns true if playing this move is legal.
   // Does not check positional superko.
@@ -206,6 +231,12 @@ class Position {
 
   // The following methods are protected to enable direct testing by unit tests.
  protected:
+  // Sets the pass alive regions for the given color in result.
+  // The caller is responsible for initializing all elements in `result` to
+  // `Color::kEmpty` before calling.
+  void CalculatePassAliveRegionsForColor(
+      Color color, std::array<Color, kN * kN>* result) const;
+
   // Returns the Group of the stone at the given coordinate. Used for testing.
   Group GroupAt(Coord c) const {
     auto s = stones_[c];

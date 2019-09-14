@@ -19,19 +19,18 @@
 #include <string>
 
 #include "cc/dual_net/dual_net.h"
+#include "cc/random.h"
 
 namespace minigo {
 
-class TfDualNetFactory : public DualNetFactory {
+class TfDualNetFactory : public ModelFactory {
  public:
   TfDualNetFactory();
 
-  int GetBufferCount() const override;
-
-  std::unique_ptr<DualNet> NewDualNet(const std::string& model) override;
+  std::unique_ptr<Model> NewModel(const std::string& descriptor) override;
 
  private:
-  int device_count_;
+  int device_count_ = 0;
 };
 
 }  // namespace minigo

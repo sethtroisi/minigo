@@ -27,7 +27,9 @@
 #include "absl/memory/memory.h"
 #include "absl/types/span.h"
 #include "cc/constants.h"
+#include "cc/inline_vector.h"
 #include "cc/position.h"
+#include "cc/symmetries.h"
 #include "cc/zobrist.h"
 
 namespace minigo {
@@ -54,6 +56,7 @@ class MctsNode {
   struct ChildInfo {
     Coord c = Coord::kInvalid;
     float N;
+    float P;
     float action_score;
   };
 
@@ -99,10 +102,15 @@ class MctsNode {
   enum class Flag : uint8_t {
     // Node is expanded.
     kExpanded = (1 << 0),
+
+    // Node has a valid canonical symmetry.
+    kHasCanonicalSymmetry = (1 << 1),
   };
 
   void SetFlag(Flag flag) { flags |= static_cast<uint8_t>(flag); }
-  bool HasFlag(Flag flag) { return (flags & static_cast<uint8_t>(flag)) != 0; }
+  bool HasFlag(Flag flag) const {
+    return (flags & static_cast<uint8_t>(flag)) != 0;
+  }
 
   // Finds the best move by visit count, N. Ties are broken using the child
   // action score.
@@ -114,13 +122,6 @@ class MctsNode {
 
   // Sorts the child nodes by visit counts, breaking ties by child action score.
   std::array<ChildInfo, kNumMoves> CalculateRankedChildInfo() const;
-
-  // Returns up to the last num_moves of moves that lead up to this node,
-  // including the node itself.
-  // After GetMoveHistory returns, history[0] is this MctsNode and history[i] is
-  // the MctsNode from i moves ago.
-  void GetMoveHistory(int num_moves,
-                      std::vector<const Position::Stones*>* history) const;
 
   // Mix noise into the node's priors:
   //   P_i = (1 - mix) * P_i + mix * noise_i
@@ -147,6 +148,9 @@ class MctsNode {
   // Remove all children from the node except c.
   void PruneChildren(Coord c);
 
+  // Adjust the visit counts via whatever hairbrained scheme.
+  void ReshapeFinalVisits();
+
   std::array<float, kNumMoves> CalculateChildActionScore() const;
 
   float CalculateSingleMoveChildActionScore(float to_play, float U_common,
@@ -155,6 +159,7 @@ class MctsNode {
     float U = U_common * child_P(i) / (1 + child_N(i));
     return Q * to_play + U - 1000.0f * !position.legal_move(i);
   }
+
 
   MctsNode* MaybeAddChild(Coord c);
 
@@ -171,6 +176,16 @@ class MctsNode {
   Coord move;
 
   uint8_t flags = 0;
+
+  // If HasFlag(Flag::kHasCanonicalSymmetry) == true, canonical_symmetry holds
+  // the symmetry that transforms the canonical form of the position to its real
+  // one.
+  // TODO(tommadams): for now, the canonical symmetry is just the one whose
+  // Zobrist hash is the smallest, which is sufficient for use with the
+  // inference cache. It would be more generally useful to use the real
+  // canonical transform such that the first move is in the top-right corner,
+  // etc.
+  uint8_t canonical_symmetry = symmetry::kIdentity;
 
   std::array<EdgeStats, kNumMoves> edges;
 

@@ -16,8 +16,11 @@
 #define CC_SYMMETRIES_H_
 
 #include <algorithm>
+#include <array>
 #include <cstring>
+#include <ostream>
 
+#include "cc/coord.h"
 #include "cc/logging.h"
 
 namespace minigo {
@@ -51,38 +54,27 @@ enum Symmetry {
   kNumSymmetries,
 };
 
-inline Symmetry Inverse(Symmetry sym) {
-  switch (sym) {
-    case kIdentity:
-      return kIdentity;
-    case kRot90:
-      return kRot270;
-    case kRot180:
-      return kRot180;
-    case kRot270:
-      return kRot90;
-    case kFlip:
-      return kFlip;
-    case kFlipRot90:
-      return kFlipRot90;
-    case kFlipRot180:
-      return kFlipRot180;
-    case kFlipRot270:
-      return kFlipRot270;
-    default:
-      MG_LOG(FATAL) << static_cast<int>(sym);
-      return kNumSymmetries;
-  }
-}
+std::ostream& operator<<(std::ostream& os, Symmetry sym);
 
-template <int N, int num_channels, typename SrcIt, typename DstIt>
-inline void Identity(SrcIt src, DstIt dst) {
+// Helpful array of all symmetries that allows iterating over all symmetries
+// without casting between int and Symmetry all the time.
+extern const std::array<Symmetry, kNumSymmetries> kAllSymmetries;
+
+// Array of inverses.
+extern const std::array<Symmetry, kNumSymmetries> kInverseSymmetries;
+
+extern const std::array<std::array<Coord, kNumMoves>, kNumSymmetries> kCoords;
+
+inline Symmetry Inverse(Symmetry sym) { return kInverseSymmetries[sym]; }
+
+template <int N, int num_channels, typename T>
+inline void Identity(const T* src, T* dst) {
   MG_CHECK(dst != src);
   std::copy_n(src, N * N * num_channels, dst);
 }
 
-template <int N, int num_channels, typename SrcIt, typename DstIt>
-inline void Rot90(SrcIt src, DstIt dst) {
+template <int N, int num_channels, typename T>
+inline void Rot90(const T* src, T* dst) {
   MG_CHECK(dst != src);
   const int row_stride = num_channels * N;
   for (int j = 0; j < N; ++j) {
@@ -94,8 +86,8 @@ inline void Rot90(SrcIt src, DstIt dst) {
   }
 }
 
-template <int N, int num_channels, typename SrcIt, typename DstIt>
-inline void Rot180(SrcIt src, DstIt dst) {
+template <int N, int num_channels, typename T>
+inline void Rot180(const T* src, T* dst) {
   MG_CHECK(dst != src);
   const int row_stride = num_channels * N;
   for (int j = 0; j < N; ++j) {
@@ -107,8 +99,8 @@ inline void Rot180(SrcIt src, DstIt dst) {
   }
 }
 
-template <int N, int num_channels, typename SrcIt, typename DstIt>
-inline void Rot270(SrcIt src, DstIt dst) {
+template <int N, int num_channels, typename T>
+inline void Rot270(const T* src, T* dst) {
   MG_CHECK(dst != src);
   const int row_stride = num_channels * N;
   for (int j = 0; j < N; ++j) {
@@ -120,8 +112,8 @@ inline void Rot270(SrcIt src, DstIt dst) {
   }
 }
 
-template <int N, int num_channels, typename SrcIt, typename DstIt>
-inline void Flip(SrcIt src, DstIt dst) {
+template <int N, int num_channels, typename T>
+inline void Flip(const T* src, T* dst) {
   MG_CHECK(dst != src);
   const int row_stride = num_channels * N;
   for (int j = 0; j < N; ++j) {
@@ -133,8 +125,8 @@ inline void Flip(SrcIt src, DstIt dst) {
   }
 }
 
-template <int N, int num_channels, typename SrcIt, typename DstIt>
-inline void FlipRot90(SrcIt src, DstIt dst) {
+template <int N, int num_channels, typename T>
+inline void FlipRot90(const T* src, T* dst) {
   MG_CHECK(dst != src);
   const int row_stride = num_channels * N;
   for (int j = 0; j < N; ++j) {
@@ -146,8 +138,8 @@ inline void FlipRot90(SrcIt src, DstIt dst) {
   }
 }
 
-template <int N, int num_channels, typename SrcIt, typename DstIt>
-inline void FlipRot180(SrcIt src, DstIt dst) {
+template <int N, int num_channels, typename T>
+inline void FlipRot180(const T* src, T* dst) {
   MG_CHECK(dst != src);
   const int row_stride = num_channels * N;
   for (int j = 0; j < N; ++j) {
@@ -159,8 +151,8 @@ inline void FlipRot180(SrcIt src, DstIt dst) {
   }
 }
 
-template <int N, int num_channels, typename SrcIt, typename DstIt>
-inline void FlipRot270(SrcIt src, DstIt dst) {
+template <int N, int num_channels, typename T>
+inline void FlipRot270(const T* src, T* dst) {
   MG_CHECK(dst != src);
   const int row_stride = num_channels * N;
   for (int j = 0; j < N; ++j) {
@@ -172,8 +164,8 @@ inline void FlipRot270(SrcIt src, DstIt dst) {
   }
 }
 
-template <int N, int num_channels, typename SrcIt, typename DstIt>
-inline void ApplySymmetry(Symmetry sym, SrcIt src, DstIt dst) {
+template <int N, int num_channels, typename T>
+inline void ApplySymmetry(Symmetry sym, const T* src, T* dst) {
   switch (sym) {
     case kIdentity:
       Identity<N, num_channels>(src, dst);
@@ -205,33 +197,10 @@ inline void ApplySymmetry(Symmetry sym, SrcIt src, DstIt dst) {
   }
 }
 
-template <int N, int num_channels, typename T>
-class NchwOutputIterator {
- public:
-  using difference_type = std::ptrdiff_t;
-  using value_type = T;
-  using reference = T&;
-  using pointer = T*;
-  using iterator_category = std::output_iterator_tag;
+Coord ApplySymmetry(Symmetry sym, Coord c);
 
-  NchwOutputIterator(T* features) : ptr_(features), offset_(0) {}
-
-  NchwOutputIterator& operator++() {
-    offset_ += N * N;
-    if (offset_ >= N * N * num_channels) {
-      offset_ -= N * N * num_channels - 1;
-    }
-    return *this;
-  }
-
-  reference operator*() const { return ptr_[offset_]; }
-
-  bool operator!=(const T* ptr) { return ptr != ptr_ + offset_; }
-
- private:
-  T* ptr_;
-  size_t offset_;
-};
+// Returns the Symmetry obtained by first applying a then b.
+Symmetry Concat(Symmetry a, Symmetry b);
 
 }  // namespace symmetry
 }  // namespace minigo

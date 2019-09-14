@@ -17,26 +17,27 @@
 
 #include <array>
 
-#include "cc/dual_net/dual_net.h"
+#include "absl/types/span.h"
+#include "cc/model/model.h"
 
 namespace minigo {
 
-class FakeDualNet : public DualNet {
+class FakeDualNet : public Model {
  public:
   FakeDualNet() : FakeDualNet(absl::Span<const float>(), 0) {}
   FakeDualNet(absl::Span<const float> priors, float value);
 
-  void RunMany(std::vector<const BoardFeatures*> features,
-               std::vector<Output*> outputs, std::string* model) override;
+  void RunMany(const std::vector<const Input*>& inputs,
+               std::vector<Output*>* outputs, std::string* model_name) override;
 
  private:
   std::array<float, kNumMoves> priors_;
   float value_;
 };
 
-class FakeDualNetFactory : public DualNetFactory {
+class FakeDualNetFactory : public ModelFactory {
  public:
-  std::unique_ptr<DualNet> NewDualNet(const std::string& model) override;
+  std::unique_ptr<Model> NewModel(const std::string& descriptor) override;
 };
 
 }  // namespace minigo

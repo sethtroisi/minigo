@@ -25,13 +25,13 @@
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "cc/constants.h"
-#include "cc/dual_net/batching_dual_net.h"
 #include "cc/dual_net/factory.h"
 #include "cc/file/path.h"
 #include "cc/file/utils.h"
 #include "cc/init.h"
 #include "cc/logging.h"
 #include "cc/mcts_player.h"
+#include "cc/model/batching_model.h"
 #include "cc/sgf.h"
 #include "cc/zobrist.h"
 #include "gflags/gflags.h"
@@ -59,7 +59,7 @@ void Puzzle() {
   auto start_time = absl::Now();
 
   auto model_desc = minigo::ParseModelDescriptor(FLAGS_model);
-  BatchingDualNetFactory batcher(NewDualNetFactory(model_desc.engine));
+  BatchingModelFactory batcher(NewModelFactory(model_desc.engine));
 
   Game::Options game_options;
   game_options.resign_enabled = false;
@@ -67,12 +67,11 @@ void Puzzle() {
   MctsPlayer::Options player_options;
   player_options.inject_noise = false;
   player_options.soft_pick = false;
-  player_options.random_symmetry = true;
   player_options.value_init_penalty = FLAGS_value_init_penalty;
   player_options.virtual_losses = FLAGS_virtual_losses;
   player_options.random_seed = FLAGS_seed;
   player_options.num_readouts = FLAGS_num_readouts;
-  player_options.verbose = false;
+  player_options.random_seed = FLAGS_seed;
 
   std::atomic<size_t> total_moves(0);
   std::atomic<size_t> correct_moves(0);
@@ -97,13 +96,13 @@ void Puzzle() {
 
       total_moves += moves.size();
 
-      auto model = batcher.NewDualNet(model_desc.model);
+      auto model = batcher.NewModel(model_desc.model);
       Game game(model->name(), model->name(), game_options);
 
       // Create player.
       auto player = absl::make_unique<MctsPlayer>(std::move(model), nullptr,
                                                   &game, player_options);
-      batcher.StartGame(player->network(), player->network());
+      batcher.StartGame(player->model(), player->model());
 
       // Play through each game. For each position in the game, compare the
       // model's suggested move to the actual move played in the game.
@@ -119,12 +118,12 @@ void Puzzle() {
 
         // Check if we predict the move that was played.
         auto expected_move = moves[move_to_predict].c;
-        auto actual_move = player->SuggestMove();
+        auto actual_move = player->SuggestMove(player_options.num_readouts);
         if (actual_move == expected_move) {
           ++correct_moves;
         }
       }
-      batcher.EndGame(player->network(), player->network());
+      batcher.EndGame(player->model(), player->model());
     });
   }
 
@@ -143,7 +142,7 @@ void Puzzle() {
 
 int main(int argc, char* argv[]) {
   minigo::Init(&argc, &argv);
-  minigo::zobrist::Init(FLAGS_seed * 614944751);
+  minigo::zobrist::Init(FLAGS_seed);
   minigo::Puzzle();
   return 0;
 }

@@ -17,10 +17,12 @@
 #include <memory>
 #include <string>
 #include <utility>
+
 #include "absl/memory/memory.h"
 #include "cc/algorithm.h"
 #include "cc/color.h"
 #include "cc/constants.h"
+#include "cc/dual_net/dual_net.h"
 #include "cc/dual_net/fake_dual_net.h"
 #include "cc/position.h"
 #include "cc/test_utils.h"
@@ -58,9 +60,9 @@ class TestablePlayer : public MctsPlayer {
       : MctsPlayer(absl::make_unique<FakeDualNet>(), nullptr, game,
                    player_options) {}
 
-  explicit TestablePlayer(std::unique_ptr<DualNet> network, Game* game,
+  explicit TestablePlayer(std::unique_ptr<Model> model, Game* game,
                           const Options& options)
-      : MctsPlayer(std::move(network), nullptr, game, options) {}
+      : MctsPlayer(std::move(model), nullptr, game, options) {}
 
   TestablePlayer(absl::Span<const float> fake_priors, float fake_value,
                  Game* game, const Options& options)
@@ -69,28 +71,15 @@ class TestablePlayer : public MctsPlayer {
 
   using MctsPlayer::PickMove;
   using MctsPlayer::PlayMove;
-  using MctsPlayer::ProcessLeaves;
-  using MctsPlayer::ResetRoot;
-  using MctsPlayer::rnd;
-  using MctsPlayer::TreePath;
   using MctsPlayer::TreeSearch;
   using MctsPlayer::UndoMove;
 
-  std::array<float, kNumMoves> Noise() {
-    std::array<float, kNumMoves> noise;
-    rnd()->Dirichlet(kDirichletAlpha, &noise);
-    return noise;
-  }
-
-  DualNet::Output Run(const DualNet::BoardFeatures& features) {
-    DualNet::Output output;
-    network()->RunMany({&features}, {&output}, nullptr);
+  Model::Output Run(const Model::Input& input) {
+    Model::Output output;
+    std::vector<const Model::Input*> inputs = {&input};
+    std::vector<Model::Output*> outputs = {&output};
+    model()->RunMany(inputs, &outputs, nullptr);
     return output;
-  }
-
-  void TreeSearch(int virtual_losses) {
-    mutable_options()->virtual_losses = virtual_losses;
-    TreeSearch();
   }
 };
 
@@ -109,11 +98,10 @@ class MctsPlayerTest : public ::testing::Test {
     auto player =
         absl::make_unique<TestablePlayer>(game_.get(), player_options);
     auto* first_node = player->root()->SelectLeaf();
-    DualNet::BoardFeatures features;
-    std::vector<const Position::Stones*> positions = {
-        &player->root()->position.stones()};
-    DualNet::SetFeatures(positions, Color::kBlack, &features);
-    auto output = player->Run(features);
+    Model::Input input;
+    input.to_play = Color::kBlack;
+    input.position_history.push_back(&player->root()->position.stones());
+    auto output = player->Run(input);
     first_node->IncorporateResults(0.0, output.policy, output.value,
                                    player->root());
     return player;
@@ -127,10 +115,6 @@ class MctsPlayerTest : public ::testing::Test {
     // Always use a deterministic random seed.
     MctsPlayer::Options player_options;
     player_options.random_seed = 17;
-    // Don't apply random symmetries. If we did, the probabilities we set in
-    // the FakeDualNet won't be chosen correctly (since the board position will
-    // be randomly transformed).
-    player_options.random_symmetry = false;
 
     std::array<float, kNumMoves> probs;
     for (auto& p : probs) {
@@ -187,7 +171,10 @@ TEST_F(MctsPlayerTest, InjectNoise) {
     EXPECT_EQ(root->child_U(0), root->child_U(i));
   }
 
-  root->InjectNoise(player->Noise(), 0.25);
+  Random rnd(456943875, 1);
+  std::array<float, kNumMoves> noise;
+  rnd.Dirichlet(kDirichletAlpha, &noise);
+  root->InjectNoise(noise, 0.25);
 
   // Priors should still be normalized after injecting noise.
   sum_P = 0;
@@ -240,7 +227,7 @@ TEST_F(MctsPlayerTest, PickMoveSoft) {
   int count_1_0 = 0;
   int count_2_0 = 0;
   int count_3_0 = 0;
-  for (int i = 0; i < 160; ++i) {
+  for (int i = 0; i < 1600; ++i) {
     auto move = player->PickMove();
     if (move == Coord(1, 0)) {
       ++count_1_0;
@@ -251,9 +238,9 @@ TEST_F(MctsPlayerTest, PickMoveSoft) {
       ++count_3_0;
     }
   }
-  EXPECT_NEAR(100, count_2_0, 5);
-  EXPECT_NEAR(50, count_1_0, 5);
-  EXPECT_NEAR(10, count_3_0, 5);
+  EXPECT_NEAR(1000, count_2_0, 50);
+  EXPECT_NEAR(500, count_1_0, 50);
+  EXPECT_NEAR(100, count_3_0, 50);
 }
 
 TEST_F(MctsPlayerTest, DontPassIfLosing) {
@@ -346,7 +333,7 @@ TEST_F(MctsPlayerTest, ColdStartParallelTreeSearch) {
   options.random_seed = 17;
   auto player = absl::make_unique<TestablePlayer>(absl::Span<const float>(),
                                                   0.17, game_.get(), options);
-  auto* root = player->root();
+  const auto* root = player->root();
 
   // Test that parallel tree search doesn't trip on an empty tree.
   EXPECT_EQ(0, root->N());
@@ -451,106 +438,6 @@ TEST_F(MctsPlayerTest, ExtractDataResignEnd) {
   EXPECT_LT(0, root->position.CalculateScore(game_->options().komi));
   EXPECT_EQ(-1, game_->result());
   EXPECT_EQ("W+R", game_->result_string());
-}
-
-// Fake DualNet implementation used to verify that MctsPlayer symmetries work
-// correctly. For each position on the board, MergeFeaturesNet returns a policy
-// value depending on the feature planes of that square, if the square or any
-// four connected neighbor is set true the policy is set to 0.01.
-class MergeFeaturesNet : public DualNet {
- public:
-  MergeFeaturesNet() : DualNet("MergeFeatures") {}
-
-  void RunMany(std::vector<const BoardFeatures*> features,
-               std::vector<Output*> outputs, std::string* model) override {
-    for (size_t i = 0; i < features.size(); ++i) {
-      Run(*features[i], outputs[i]);
-    }
-    if (model != nullptr) {
-      *model = "MergeFeaturesNet";
-    }
-  }
-
- private:
-  void Run(const BoardFeatures& features, Output* output) {
-    for (int c = 0; c < kN * kN; ++c) {
-      bool present = false;
-      for (const auto n : kNeighborCoords[c]) {
-        const float* src = features.data() + n * DualNet::kNumStoneFeatures;
-        for (int f = 0; f < DualNet::kNumStoneFeatures - 1; ++f) {
-          if (src[f] != 0) {
-            present = true;
-          }
-        }
-      }
-      output->policy[c] = 0.01 * present;
-    }
-    output->policy[Coord::kPass] = 0.0;
-    output->value = 0.0;
-  }
-};
-
-TEST_F(MctsPlayerTest, SymmetriesTest) {
-  MctsPlayer::Options options;
-  options.random_seed = 17;
-  options.random_symmetry = true;
-  TestablePlayer player(absl::make_unique<MergeFeaturesNet>(), game_.get(),
-                        options);
-
-  // Without playing a move, all features planes should be zero except the last
-  // one (it's black's turn to play).
-  auto* root = player.root();
-  TestablePlayer::TreePath path(root, root);
-  root->AddVirtualLoss(root);
-  player.ProcessLeaves({&path, 1}, true);
-  for (int i = 0; i < kN * kN; ++i) {
-    ASSERT_EQ(0.0, root->child_P(i));
-  }
-
-  // Play an odd number of moves.
-  // Because it's white to play next, the output of the MergeFeaturesNet should
-  // only be non-zero except near locations where we have played.
-  std::vector<std::unique_ptr<MctsNode>> nodes;
-  std::vector<std::string> moves = {"B3", "F1", "C7"};
-  auto* parent = root;
-  for (const auto& move : moves) {
-    nodes.push_back(absl::make_unique<MctsNode>(parent, Coord::FromGtp(move)));
-    parent = nodes.back().get();
-  }
-
-  // 4 squares near B3 + 3 next to F1 + 4 near C7 should have equal policy.
-  float policy_fraction = 1.0 / (4 + 3 + 4);
-
-  // Run the MergeFeaturesNet many times to have a good chance of exercising all
-  // the symmetries.
-  for (int i = 0; i < 100; ++i) {
-    auto* leaf = nodes.back().get();
-    path.leaf = leaf;
-    leaf->AddVirtualLoss(root);
-    player.ProcessLeaves({&path, 1}, true);
-    ASSERT_EQ(0.0, leaf->child_P(Coord::FromGtp("pass")));
-    for (const auto move : moves) {
-      // Playing where stones exist is illegal and should have been marked as 0.
-      ASSERT_EQ(0.0, leaf->child_P(Coord::FromGtp(move)));
-      for (const auto n : kNeighborCoords[Coord::FromGtp(move)]) {
-        ASSERT_NEAR(policy_fraction, leaf->child_P(n), 1e-7);
-      }
-    }
-  }
-}
-
-TEST_F(MctsPlayerTest, ResetRoot) {
-  auto player =
-      absl::make_unique<TestablePlayer>(game_.get(), MctsPlayer::Options());
-
-  auto* game_root = player->root();
-
-  auto c = Coord(12);
-  player->PlayMove(c);
-
-  EXPECT_EQ(c, player->root()->move);
-  player->ResetRoot();
-  EXPECT_EQ(game_root, player->root());
 }
 
 TEST_F(MctsPlayerTest, UndoMove) {

@@ -65,6 +65,43 @@ MctsNode::MctsNode(MctsNode* parent, Coord move)
       stats(&parent->edges[move]),
       move(move),
       position(parent->position) {
+  // TODO(tommadams): move this code into the MctsPlayer and only perform it
+  // only if we are using an inference cache.
+  if (parent->HasFlag(Flag::kHasCanonicalSymmetry)) {
+    SetFlag(Flag::kHasCanonicalSymmetry);
+    canonical_symmetry = parent->canonical_symmetry;
+  } else {
+    // TODO(tommadams): skip this check if `move` is kPass or on the diagonal.
+    static_assert(symmetry::kIdentity == 0, "kIdentity must be 0");
+
+    // When choosing a canonical symmetry, we consider the "best" symmetry to
+    // be the one with the smallest Zobrist hash. The "best" symmetry is only
+    // canonical if its hash value is also unique among the hashes from the
+    // other possible symmetries.
+    auto best_symmetry = symmetry::kIdentity;
+    auto best_hash = position.stone_hash();
+    bool found_unique_hash = true;
+    std::array<Stone, kN * kN> transformed;
+    for (int i = 1; i < symmetry::kNumSymmetries; ++i) {
+      auto sym = static_cast<symmetry::Symmetry>(i);
+      symmetry::ApplySymmetry<kN, 1>(sym, position.stones().data(),
+                                     transformed.data());
+      auto stone_hash = Position::CalculateStoneHash(transformed);
+      if (stone_hash < best_hash) {
+        best_symmetry = sym;
+        best_hash = stone_hash;
+      } else if (stone_hash == best_hash) {
+        found_unique_hash = false;
+        break;
+      }
+    }
+
+    if (found_unique_hash) {
+      SetFlag(Flag::kHasCanonicalSymmetry);
+      canonical_symmetry = symmetry::Inverse(best_symmetry);
+    }
+  }
+
   MG_DCHECK(move >= 0);
   MG_DCHECK(move < kNumMoves);
 
@@ -129,6 +166,38 @@ Coord MctsNode::GetMostVisitedMove() const {
   return c;
 }
 
+void MctsNode::ReshapeFinalVisits() {
+  Coord best = GetMostVisitedMove();
+  float U_common = U_scale() * std::sqrt(1.0f + N());
+  float to_play = position.to_play() == Color::kBlack ? 1 : -1;
+  float best_cas =
+      CalculateSingleMoveChildActionScore(to_play, U_common, uint16_t(best));
+
+  // int total = 0;
+  // We explored this child with uncertainty about its value.  Now, after
+  // searching, we change the visit count to reflect how many visits we would
+  // have given it with our newer understanding of its regret relative to our
+  // best move.
+  for (int i = 0; i < kNumMoves; ++i) {
+    if (i == uint16_t(best)) {
+      continue;
+    }
+
+    // Change N_child to the smallest value that satisfies the inequality
+    // best_cas > Q + (U_scale * P * sqrt(N_parent) / N_child)
+    // Solving for N_child, we get:
+    int new_N = std::max(
+        0, std::min(
+               static_cast<int>(child_N(i)),
+               static_cast<int>(-1 * (U_scale() * child_P(i) * std::sqrt(N())) /
+                                ((child_Q(i) * to_play) - best_cas)) -
+                   1));
+    // total += edges[i].N - new_N;
+    edges[i].N = new_N;
+  }
+  // MG_LOG(INFO) << "Pruned " << total << " visits.";
+}
+
 std::array<MctsNode::ChildInfo, kNumMoves> MctsNode::CalculateRankedChildInfo()
     const {
   auto child_action_score = CalculateChildActionScore();
@@ -136,6 +205,7 @@ std::array<MctsNode::ChildInfo, kNumMoves> MctsNode::CalculateRankedChildInfo()
   for (int i = 0; i < kNumMoves; ++i) {
     child_info[i].c = i;
     child_info[i].N = child_N(i);
+    child_info[i].P = child_P(i);
     child_info[i].action_score = child_action_score[i];
   }
   std::sort(child_info.begin(), child_info.end(),
@@ -143,10 +213,10 @@ std::array<MctsNode::ChildInfo, kNumMoves> MctsNode::CalculateRankedChildInfo()
               if (a.N != b.N) {
                 return a.N > b.N;
               }
-              if (a.action_score != b.action_score) {
-                return a.action_score > b.action_score;
+              if (a.P != b.P) {
+                return a.P > b.P;
               }
-              return a.c > b.c;
+              return a.action_score > b.action_score;
             });
   return child_info;
 }
@@ -218,20 +288,6 @@ std::string MctsNode::MostVisitedPathString() const {
   }
   absl::StrAppendFormat(&result, "Q: %0.5f", node->Q());
   return result;
-}
-
-void MctsNode::GetMoveHistory(
-    int num_moves, std::vector<const Position::Stones*>* history) const {
-  history->clear();
-  history->reserve(num_moves);
-  const auto* node = this;
-  for (int j = 0; j < num_moves; ++j) {
-    history->push_back(&node->position.stones());
-    node = node->parent;
-    if (node == nullptr) {
-      break;
-    }
-  }
 }
 
 void MctsNode::InjectNoise(const std::array<float, kNumMoves>& noise,

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <stdio.h>
+
 #include <iostream>
 #include <memory>
 #include <string>
@@ -31,9 +32,7 @@
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "cc/constants.h"
-#include "cc/dual_net/batching_dual_net.h"
 #include "cc/dual_net/factory.h"
-#include "cc/dual_net/reloading_dual_net.h"
 #include "cc/file/path.h"
 #include "cc/file/utils.h"
 #include "cc/game.h"
@@ -41,11 +40,15 @@
 #include "cc/init.h"
 #include "cc/logging.h"
 #include "cc/mcts_player.h"
+#include "cc/model/batching_model.h"
+#include "cc/model/inference_cache.h"
+#include "cc/model/reloading_model.h"
 #include "cc/platform/utils.h"
 #include "cc/random.h"
 #include "cc/tf_utils.h"
 #include "cc/zobrist.h"
 #include "gflags/gflags.h"
+#include "wtf/macros.h"
 
 // Game options flags.
 DEFINE_double(resign_threshold, -0.999, "Resign threshold.");
@@ -93,6 +96,20 @@ DEFINE_string(flags_path, "",
               "Note that flags_path is different from gflags flagfile, which "
               "is only parsed once on startup.");
 
+DEFINE_double(fastplay_frequency, 0.0,
+              "The fraction of moves that should use a lower number of "
+              "playouts, aka 'playout cap oscillation'.\nIf this is set, "
+              "'fastplay_readouts' should also be set.");
+
+DEFINE_int32(fastplay_readouts, 20,
+             "The number of readouts to perform on a 'low readout' move, "
+             "aka 'playout cap oscillation'.\nIf this is set, "
+             "'fastplay_frequency' should be nonzero.");
+
+DEFINE_bool(target_pruning, false,
+            "If true, subtract visits from all moves that weren't the best move "
+            "until the uncertainty level compensates.");
+
 // Time control flags.
 DEFINE_double(seconds_per_move, 0,
               "If non-zero, the number of seconds to spend thinking about each "
@@ -119,6 +136,12 @@ DEFINE_int32(parallel_games, 32, "Number of games to play in parallel.");
 DEFINE_int32(num_games, 0,
              "Total number of games to play. Defaults to parallel_games. "
              "Only one of num_games and run_forever must be set.");
+DEFINE_int32(cache_size_mb, 0, "Size of the inference cache in MB.");
+DEFINE_int32(cache_shards, 8,
+             "Number of ways to shard the inference cache. The cache uses "
+             "is locked on a per-shard basis, so more shards means less "
+             "contention but each shard is smaller. The number of shards "
+             "is clamped such that it's always <= parallel_games.");
 
 // Output flags.
 DEFINE_string(output_dir, "",
@@ -133,6 +156,8 @@ DEFINE_string(sgf_dir, "",
               "SGF directory for selfplay and puzzles. If empty in selfplay "
               "mode, no SGF is written.");
 DEFINE_string(bigtable_tag, "", "Used in Bigtable metadata");
+DEFINE_string(wtf_trace, "/tmp/minigo.wtf-trace",
+              "Output path for WTF traces.");
 
 namespace minigo {
 namespace {
@@ -148,15 +173,18 @@ void ParseOptionsFromFlags(Game::Options* game_options,
   player_options->noise_mix = FLAGS_noise_mix;
   player_options->inject_noise = FLAGS_inject_noise;
   player_options->soft_pick = FLAGS_soft_pick;
-  player_options->random_symmetry = FLAGS_random_symmetry;
   player_options->value_init_penalty = FLAGS_value_init_penalty;
   player_options->policy_softmax_temp = FLAGS_policy_softmax_temp;
   player_options->virtual_losses = FLAGS_virtual_losses;
   player_options->random_seed = FLAGS_seed;
+  player_options->random_symmetry = FLAGS_random_symmetry;
   player_options->num_readouts = FLAGS_num_readouts;
   player_options->seconds_per_move = FLAGS_seconds_per_move;
   player_options->time_limit = FLAGS_time_limit;
   player_options->decay_factor = FLAGS_decay_factor;
+  player_options->fastplay_frequency = FLAGS_fastplay_frequency;
+  player_options->fastplay_readouts = FLAGS_fastplay_readouts;
+  player_options->target_pruning = FLAGS_target_pruning;
 }
 
 void LogEndGameInfo(const Game& game, absl::Duration game_time) {
@@ -201,10 +229,23 @@ void LogEndGameInfo(const Game& game, absl::Duration game_time) {
 class SelfPlayer {
  public:
   explicit SelfPlayer(ModelDescriptor desc)
-      : engine_(std::move(desc.engine)), model_(std::move(desc.model)) {}
+      : rnd_(Random::kUniqueSeed, Random::kUniqueStream),
+        engine_(std::move(desc.engine)),
+        model_(std::move(desc.model)) {}
 
   void Run() {
-    auto start_time = absl::Now();
+    auto player_start_time = absl::Now();
+
+    if (FLAGS_cache_size_mb > 0) {
+      auto capacity =
+          BasicInferenceCache::CalculateCapacity(FLAGS_cache_size_mb);
+      MG_LOG(INFO) << "Will cache up to " << capacity
+                   << " inferences, using roughly " << FLAGS_cache_size_mb
+                   << "MB.\n";
+      auto num_shards = std::min(FLAGS_parallel_games, FLAGS_cache_shards);
+      inference_cache_ =
+          std::make_shared<ThreadSafeInferenceCache>(capacity, num_shards);
+    }
 
     // Figure out how many games we should play.
     MG_CHECK(FLAGS_parallel_games >= 1);
@@ -228,21 +269,21 @@ class SelfPlayer {
 
     {
       absl::MutexLock lock(&mutex_);
-      auto model_factory = NewDualNetFactory(engine_);
+      auto model_factory = NewModelFactory(engine_);
       // If the model path contains a pattern, wrap the implementation factory
       // in a ReloadingDualNetFactory to automatically reload the latest model
       // that matches the pattern.
       if (model_.find("%d") != std::string::npos) {
-        model_factory = absl::make_unique<ReloadingDualNetFactory>(
+        model_factory = absl::make_unique<ReloadingModelFactory>(
             std::move(model_factory), absl::Seconds(3));
       }
       // Note: it's more efficient to perform the reload wrapping before the
       // batch wrapping because this way, we only need to reload the single
       // implementation DualNet when a new model is found. If we performed batch
       // wrapping before reload wrapping, the reload code would need to update
-      // all the BatchingDualNet wrappers.
+      // all the BatchingModel wrappers.
       batcher_ =
-          absl::make_unique<BatchingDualNetFactory>(std::move(model_factory));
+          absl::make_unique<BatchingModelFactory>(std::move(model_factory));
     }
     for (int i = 0; i < FLAGS_parallel_games; ++i) {
       threads_.emplace_back(std::bind(&SelfPlayer::ThreadRun, this, i));
@@ -252,7 +293,8 @@ class SelfPlayer {
     }
 
     MG_LOG(INFO) << "Played " << num_games << " games, total time "
-                 << absl::ToDoubleSeconds(absl::Now() - start_time) << " sec.";
+                 << absl::ToDoubleSeconds(absl::Now() - player_start_time)
+                 << " sec.";
 
     {
       absl::MutexLock lock(&mutex_);
@@ -268,12 +310,9 @@ class SelfPlayer {
   struct ThreadOptions {
     void Init(int thread_id, Random* rnd) {
       ParseOptionsFromFlags(&game_options, &player_options);
-      player_options.verbose = thread_id == 0;
+      verbose = thread_id == 0;
       // If an random seed was explicitly specified, make sure we use a
       // different seed for each thread.
-      if (player_options.random_seed != 0) {
-        player_options.random_seed += 1299283 * thread_id;
-      }
       game_options.resign_enabled = (*rnd)() >= FLAGS_disable_resign_pct;
 
       holdout_pct = FLAGS_holdout_pct;
@@ -288,9 +327,11 @@ class SelfPlayer {
     std::string output_dir;
     std::string holdout_dir;
     std::string sgf_dir;
+    bool verbose = false;
   };
 
   void ThreadRun(int thread_id) {
+    WTF_THREAD_ENABLE("SelfPlay");
     // Only print the board using ANSI colors if stderr is sent to the
     // terminal.
     const bool use_ansi_colors = FdSupportsAnsiColors(fileno(stderr));
@@ -327,43 +368,131 @@ class SelfPlayer {
         thread_options.Init(thread_id, &rnd_);
         game = absl::make_unique<Game>(model_, model_,
                                        thread_options.game_options);
-        player = absl::make_unique<MctsPlayer>(batcher_->NewDualNet(model_),
-                                               nullptr, game.get(),
+        player = absl::make_unique<MctsPlayer>(batcher_->NewModel(model_),
+                                               inference_cache_, game.get(),
                                                thread_options.player_options);
         if (model_name_.empty()) {
-          model_name_ = player->network()->name();
+          model_name_ = player->model()->name();
         }
       }
 
+      if (thread_options.verbose) {
+        MG_LOG(INFO) << "MctsPlayer options: " << player->options();
+        MG_LOG(INFO) << "Game options: " << game->options();
+        MG_LOG(INFO) << "Random seed used: " << player->seed();
+      }
+
       // Play the game.
-      auto start_time = absl::Now();
+      auto game_start_time = absl::Now();
       {
         absl::MutexLock lock(&mutex_);
-        BatchingDualNetFactory::StartGame(player->network(), player->network());
+        BatchingModelFactory::StartGame(player->model(), player->model());
       }
+      int current_readouts = 0;
+      absl::Time search_start_time;
       while (!game->game_over() && !player->root()->at_move_limit()) {
-        auto move = player->SuggestMove();
-        if (player->options().verbose) {
-          const auto& position = player->root()->position;
-          MG_LOG(INFO) << player->root()->position.ToPrettyString(
-              use_ansi_colors);
-          MG_LOG(INFO) << "Move: " << position.n()
-                       << " Captures X: " << position.num_captures()[0]
-                       << " O: " << position.num_captures()[1];
-          MG_LOG(INFO) << player->root()->Describe();
+        if (player->root()->position.n() >= kMinPassAliveMoves &&
+            player->root()->position.CalculateWholeBoardPassAlive()) {
+          // Play pass moves to end the game.
+          while (!game->game_over()) {
+            MG_CHECK(player->PlayMove(Coord::kPass));
+          }
+          break;
         }
-        MG_CHECK(player->PlayMove(move));
+
+        // Record some information using for printing tree search stats.
+        if (thread_options.verbose) {
+          current_readouts = player->root()->N();
+          search_start_time = absl::Now();
+        }
+
+        bool fastplay =
+            (rnd_() < thread_options.player_options.fastplay_frequency);
+        int readouts =
+            (fastplay ? thread_options.player_options.fastplay_readouts
+                      : thread_options.player_options.num_readouts);
+
+        // Choose the move to play, optionally adding noise.
+        Coord move = Coord::kInvalid;
+        {
+          WTF_SCOPE0("SuggestMove");
+          move = player->SuggestMove(readouts, !fastplay);
+        }
+
+        // Log tree search stats.
+        if (thread_options.verbose) {
+          WTF_SCOPE0("Logging");
+          const auto* root = player->root();
+          const auto& position = root->position;
+
+          int num_readouts = root->N() - current_readouts;
+          auto elapsed = absl::Now() - search_start_time;
+          elapsed = elapsed * 100 / num_readouts;
+
+          auto all_stats = batcher_->FlushStats();
+          MG_CHECK(all_stats.size() == 1);
+          const auto& stats = all_stats[0].second;
+          MG_LOG(INFO)
+              << absl::FormatTime("%Y-%m-%d %H:%M:%E3S", absl::Now(),
+                                  absl::LocalTimeZone())
+              << absl::StreamFormat(
+                     "  num_inferences: %d  buffer_count: %d  run_batch_total: "
+                     "%.3fms  run_many_total : %.3fms  run_batch_per_inf: "
+                     "%.3fms  run_many_per_inf: %.3fms",
+                     stats.num_inferences, stats.buffer_count,
+                     absl::ToDoubleMilliseconds(stats.run_batch_time),
+                     absl::ToDoubleMilliseconds(stats.run_many_time),
+                     absl::ToDoubleMilliseconds(stats.run_batch_time /
+                                                stats.num_inferences),
+                     absl::ToDoubleMilliseconds(stats.run_many_time /
+                                                stats.num_inferences));
+          MG_LOG(INFO) << root->CalculateTreeStats().ToString();
+
+          if (!fastplay) {
+            MG_LOG(INFO) << root->position.ToPrettyString(use_ansi_colors);
+            MG_LOG(INFO) << "Move: " << position.n()
+                         << " Captures X: " << position.num_captures()[0]
+                         << " O: " << position.num_captures()[1];
+            MG_LOG(INFO) << root->Describe();
+            if (inference_cache_ != nullptr) {
+              MG_LOG(INFO) << "Inference cache stats: "
+                           << inference_cache_->GetStats();
+            }
+          }
+        }
+
+        // Play the chosen move.
+        {
+          WTF_SCOPE0("PlayMove");
+          MG_CHECK(player->PlayMove(move));
+        }
+
+        if (!fastplay && move != Coord::kResign) {
+          (*game).MarkLastMoveAsTrainable();
+        }
+
+        // Log information about the move played.
+        if (thread_options.verbose) {
+          MG_LOG(INFO) << absl::StreamFormat("%s Q: %0.5f", player->name(),
+                                             player->root()->Q());
+          MG_LOG(INFO) << "Played >>" << move;
+        }
       }
       {
         absl::MutexLock lock(&mutex_);
-        BatchingDualNetFactory::EndGame(player->network(), player->network());
+        BatchingModelFactory::EndGame(player->model(), player->model());
+      }
+
+      if (thread_options.verbose) {
+        MG_LOG(INFO) << "Inference history: "
+                     << player->GetModelsUsedForInference();
       }
 
       {
         // Log the end game info with the shared mutex held to prevent the
         // outputs from multiple threads being interleaved.
         absl::MutexLock lock(&mutex_);
-        LogEndGameInfo(*game, absl::Now() - start_time);
+        LogEndGameInfo(*game, absl::Now() - game_start_time);
         win_stats_.Update(*game);
       }
 
@@ -447,10 +576,11 @@ class SelfPlayer {
   }
 
   absl::Mutex mutex_;
-  std::unique_ptr<BatchingDualNetFactory> batcher_ GUARDED_BY(&mutex_);
+  std::unique_ptr<BatchingModelFactory> batcher_ GUARDED_BY(&mutex_);
   Random rnd_ GUARDED_BY(&mutex_);
   std::string model_name_ GUARDED_BY(&mutex_);
   std::vector<std::thread> threads_;
+  std::shared_ptr<ThreadSafeInferenceCache> inference_cache_;
 
   // True if we should run selfplay indefinitely.
   bool run_forever_ GUARDED_BY(&mutex_) = false;
@@ -472,8 +602,18 @@ class SelfPlayer {
 
 int main(int argc, char* argv[]) {
   minigo::Init(&argc, &argv);
-  minigo::zobrist::Init(FLAGS_seed * 614944751);
-  minigo::SelfPlayer player(minigo::ParseModelDescriptor(FLAGS_model));
-  player.Run();
+  minigo::zobrist::Init(FLAGS_seed);
+
+  WTF_THREAD_ENABLE("Main");
+  {
+    WTF_SCOPE0("Selfplay");
+    minigo::SelfPlayer player(minigo::ParseModelDescriptor(FLAGS_model));
+    player.Run();
+  }
+
+#ifdef WTF_ENABLE
+  MG_CHECK(wtf::Runtime::GetInstance()->SaveToFile(FLAGS_wtf_trace));
+#endif
+
   return 0;
 }

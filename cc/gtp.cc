@@ -19,9 +19,9 @@
 #include "cc/constants.h"
 #include "cc/dual_net/factory.h"
 #include "cc/file/path.h"
-#include "cc/gtp_player.h"
+#include "cc/gtp_client.h"
 #include "cc/init.h"
-#include "cc/minigui_player.h"
+#include "cc/minigui_gtp_client.h"
 #include "cc/zobrist.h"
 #include "gflags/gflags.h"
 
@@ -48,8 +48,6 @@ DEFINE_double(value_init_penalty, 0.0,
               "clamped to [-1, 1].\n"
               "0 is init-to-parent [default], 2.0 is init-to-loss.\n"
               "This behaves similiarly to leela's FPU \"First Play Urgency\".");
-DEFINE_bool(tree_reuse, true,
-            "Enable reuse of shared subtrees between consecutive moves.");
 
 // Time control flags.
 DEFINE_double(seconds_per_move, 0,
@@ -68,9 +66,10 @@ DEFINE_double(decay_factor, 0.98,
 DEFINE_string(model, "",
               "Path to a minigo model. The format of the model depends on the "
               "inference engine.");
-DEFINE_int32(cache_size_mb, 0,
-             "Size of the inference cache in MB. A value of 0 (the default) "
-             "disables the cache.");
+DEFINE_int32(cache_size_mb, 1024,
+             "Size of the inference cache in MB. Tree reuse in GTP mode is "
+             "disabled, so cache_size_mb should be non-zero for reasonable "
+             "performance. Enabling minigui mode requires an inference cache.");
 
 namespace minigo {
 namespace {
@@ -79,44 +78,49 @@ void Gtp() {
   Game::Options game_options;
   game_options.resign_threshold = FLAGS_resign_threshold;
 
-  GtpPlayer::Options player_options;
-  player_options.ponder_limit = FLAGS_ponder_limit;
-  player_options.courtesy_pass = FLAGS_courtesy_pass;
+  MctsPlayer::Options player_options;
   player_options.inject_noise = false;
   player_options.soft_pick = false;
-  player_options.random_symmetry = true;
   player_options.value_init_penalty = FLAGS_value_init_penalty;
-  player_options.tree_reuse = FLAGS_tree_reuse;
+  player_options.tree_reuse = false;
   player_options.virtual_losses = FLAGS_virtual_losses;
   player_options.num_readouts = FLAGS_num_readouts;
   player_options.seconds_per_move = FLAGS_seconds_per_move;
   player_options.time_limit = FLAGS_time_limit;
   player_options.decay_factor = FLAGS_decay_factor;
 
+  GtpClient::Options client_options;
+  client_options.ponder_limit = FLAGS_ponder_limit;
+  client_options.courtesy_pass = FLAGS_courtesy_pass;
+
   MG_LOG(INFO) << game_options << " " << player_options;
 
-  std::unique_ptr<GtpPlayer> player;
   auto model_desc = minigo::ParseModelDescriptor(FLAGS_model);
-  auto model_factory = NewDualNetFactory(model_desc.engine);
-  auto model = model_factory->NewDualNet(model_desc.model);
-  std::unique_ptr<BasicInferenceCache> cache;
+  auto model_factory = NewModelFactory(model_desc.engine);
+
+  std::shared_ptr<ThreadSafeInferenceCache> inference_cache;
   if (FLAGS_cache_size_mb > 0) {
     auto capacity = BasicInferenceCache::CalculateCapacity(FLAGS_cache_size_mb);
-    std::cerr << "Will cache up to " << capacity
-              << " inferences, using roughly " << FLAGS_cache_size_mb
-              << "MB.\n";
-    cache = absl::make_unique<BasicInferenceCache>(capacity);
+    MG_LOG(INFO) << "Will cache up to " << capacity
+                 << " inferences, using roughly " << FLAGS_cache_size_mb
+                 << "MB.\n";
+    inference_cache = std::make_shared<ThreadSafeInferenceCache>(capacity, 1);
+  } else {
+    MG_LOG(WARNING) << "cache_size_mb == 0 results in poor performance in GTP "
+                       "mode because tree reuse is disabled.";
   }
 
-  Game game(model->name(), model->name(), game_options);
+  std::unique_ptr<GtpClient> client;
   if (FLAGS_minigui) {
-    player = absl::make_unique<MiniguiPlayer>(
-        std::move(model), std::move(cache), &game, player_options);
+    client = absl::make_unique<MiniguiGtpClient>(
+        std::move(model_factory), std::move(inference_cache), model_desc.model,
+        game_options, player_options, client_options);
   } else {
-    player = absl::make_unique<GtpPlayer>(std::move(model), std::move(cache),
-                                          &game, player_options);
+    client = absl::make_unique<GtpClient>(
+        std::move(model_factory), std::move(inference_cache), model_desc.model,
+        game_options, player_options, client_options);
   }
-  player->Run();
+  client->Run();
 }
 
 }  // namespace

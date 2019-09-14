@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <stdio.h>
+
 #include <iostream>
 
 #include "cc/dual_net/factory.h"
@@ -44,8 +45,8 @@ void SimpleExample() {
 
   // Load the model specified by the command line arguments.
   auto descriptor = ParseModelDescriptor(FLAGS_model);
-  auto model_factory = NewDualNetFactory(descriptor.engine);
-  auto model = model_factory->NewDualNet(descriptor.model);
+  auto model_factory = NewModelFactory(descriptor.engine);
+  auto model = model_factory->NewModel(descriptor.model);
 
   // Create a game object that tracks the move history & final score.
   Game::Options game_options;
@@ -60,7 +61,7 @@ void SimpleExample() {
 
   // Play the game.
   while (!game.game_over() && !player.root()->at_move_limit()) {
-    auto move = player.SuggestMove();
+    auto move = player.SuggestMove(player_options.num_readouts);
 
     const auto& position = player.root()->position;
     std::cout << player.root()->position.ToPrettyString(use_ansi_colors)

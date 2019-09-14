@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "absl/strings/str_join.h"
+#include "absl/strings/str_replace.h"
 #include "absl/strings/str_split.h"
 #include "cc/constants.h"
 #include "cc/logging.h"
@@ -35,6 +36,7 @@ std::vector<std::string> SplitBoardString(absl::string_view str) {
     if (stripped.empty()) {
       continue;
     }
+    stripped = absl::StrReplaceAll(stripped, {{" ", ""}});
     MG_CHECK(stripped.size() <= kN);
     stripped.resize(kN, '.');
     lines.push_back(std::move(stripped));
@@ -53,8 +55,11 @@ std::string CleanBoardString(absl::string_view str) {
 }
 
 TestablePosition::TestablePosition(absl::string_view board_str, Color to_play)
+    : TestablePosition(ParseBoard(board_str), to_play) {}
+
+TestablePosition::TestablePosition(const std::array<Color, kN * kN>& stones,
+                                   Color to_play)
     : Position(&board_visitor, &group_visitor, to_play) {
-  auto stones = ParseBoard(board_str);
   for (int i = 0; i < kN * kN; ++i) {
     if (stones[i] != Color::kEmpty) {
       AddStoneToBoard(i, stones[i]);

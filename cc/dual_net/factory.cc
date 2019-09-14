@@ -35,10 +35,6 @@
 #include "cc/dual_net/tpu_dual_net.h"
 #endif  // MG_ENABLE_TPU_DUAL_NET
 
-#ifdef MG_ENABLE_TRT_DUAL_NET
-#include "cc/dual_net/trt_dual_net.h"
-#endif  // MG_ENABLE_TRT_DUAL_NET
-
 namespace minigo {
 
 std::ostream& operator<<(std::ostream& os, const ModelDescriptor& desc) {
@@ -57,11 +53,11 @@ ModelDescriptor ParseModelDescriptor(absl::string_view descriptor) {
   return result;
 }
 
-std::unique_ptr<DualNetFactory> NewDualNetFactory(
-    absl::string_view engine_desc) {
+std::unique_ptr<ModelFactory> NewModelFactory(absl::string_view engine_desc) {
   MG_CHECK(!engine_desc.empty());
 
-  std::vector<std::string> parts = absl::StrSplit(engine_desc, absl::MaxSplits(':', 1));
+  std::vector<std::string> parts =
+      absl::StrSplit(engine_desc, absl::MaxSplits(':', 1));
   auto engine = parts[0];
   std::string arg_str;
   if (parts.size() == 2) {
@@ -75,9 +71,7 @@ std::unique_ptr<DualNetFactory> NewDualNetFactory(
     MG_CHECK(!arg_str.empty());
     uint64_t seed = 0;
     MG_CHECK(absl::SimpleAtoi(arg_str, &seed));
-    // TODO(tommadams): expose policy_stddev & value_stddev as command line
-    // arguments.
-    return absl::make_unique<RandomDualNetFactory>(13 * seed, 0.4, 0.4);
+    return absl::make_unique<RandomDualNetFactory>(13 * seed);
   }
 
 #ifdef MG_ENABLE_TF_DUAL_NET
@@ -96,17 +90,14 @@ std::unique_ptr<DualNetFactory> NewDualNetFactory(
 
 #ifdef MG_ENABLE_TPU_DUAL_NET
   if (engine == "tpu") {
-    MG_CHECK(!arg_str.empty());
-    return absl::make_unique<TpuDualNetFactory>(arg_str);
+    std::vector<std::string> args =
+        absl::StrSplit(arg_str, absl::MaxSplits(':', 1));
+    MG_CHECK(args.size() == 2) << "\"" << arg_str << "\"";
+    int buffer_count = 0;
+    MG_CHECK(absl::SimpleAtoi(args[0], &buffer_count)) << args[0];
+    return absl::make_unique<TpuDualNetFactory>(buffer_count, args[1]);
   }
 #endif  // MG_ENABLE_TPU_DUAL_NET
-
-#ifdef MG_ENABLE_TRT_DUAL_NET
-  if (engine == "trt") {
-    MG_CHECK(arg_str.empty());
-    return absl::make_unique<TrtDualNetFactory>();
-  }
-#endif  // MG_ENABLE_TRT_DUAL_NET
 
   MG_LOG(FATAL) << "Unrecognized inference engine \"" << engine << "\"";
   return nullptr;

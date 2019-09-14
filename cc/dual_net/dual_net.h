@@ -22,7 +22,9 @@
 
 #include "absl/types/span.h"
 #include "cc/constants.h"
+#include "cc/model/model.h"
 #include "cc/position.h"
+#include "cc/symmetries.h"
 
 namespace minigo {
 
@@ -33,7 +35,7 @@ namespace minigo {
 // 1s if black is to play, or 0s if white is to play. The planes are
 // concatenated together to give input features:
 //   [X_t, Y_t, X_t-1, Y_t-1, ..., X_t-7, Y_t-7, C].
-class DualNet {
+class DualNet : public Model {
  public:
   // Size of move history in the stone features.
   static constexpr int kMoveHistory = 8;
@@ -52,57 +54,26 @@ class DualNet {
   using StoneFeatures = std::array<float, kNumStoneFeatures>;
   using BoardFeatures = std::array<float, kNumBoardFeatures>;
 
-  enum class InputLayout {
-    kNHWC,
-    kNCHW,
-  };
+  using Input = Model::Input;
+  using Output = Model::Output;
 
-  // Generates the board features from the history of recent moves, where
-  // history[0] is the current board position, and history[i] is the board
-  // position from i moves ago.
-  // history.size() must be <= kMoveHistory.
-  // TODO(tommadams): Move Position::Stones out of the Position class so we
-  // don't need to depend on position.h.
   static void SetFeatures(absl::Span<const Position::Stones* const> history,
                           Color to_play, BoardFeatures* features);
 
-  struct Output {
-    std::array<float, kNumMoves> policy;
-    float value;
-  };
+  explicit DualNet(std::string name);
+  ~DualNet() override;
 
-  explicit DualNet(std::string name) : name_(std::move(name)) {}
-  virtual ~DualNet();
-
-  const std::string& name() const { return name_; }
-
-  // Runs inference on a batch of input features.
-  // TODO(tommadams): rename model -> model_name.
-  virtual void RunMany(std::vector<const BoardFeatures*> features,
-                       std::vector<Output*> outputs, std::string* model) = 0;
-
-  // Potentially prepares the DualNet to avoid expensive operations during
-  // RunMany() calls with up to 'capacity' features.
-  virtual void Reserve(size_t capacity);
-
-  virtual InputLayout GetInputLayout() const;
+  void RunMany(const std::vector<const Input*>& inputs,
+               std::vector<Output*>* outputs, std::string* model_name) override;
 
  private:
-  const std::string name_;
-};
+  // Runs inference on a batch of input features.
+  // TODO(tommadams): rename model -> model_name.
+  virtual void RunManyImpl(std::string* model_name) = 0;
 
-// Factory that creates DualNet instances.
-// All implementations are required to be thread safe.
-class DualNetFactory {
- public:
-  virtual ~DualNetFactory();
-
-  // Returns the ideal number of inference requests in flight for DualNet
-  // instances created by this factory.
-  virtual int GetBufferCount() const;
-
-  virtual std::unique_ptr<DualNet> NewDualNet(
-      const std::string& model_path) = 0;
+ protected:
+  std::vector<BoardFeatures> features_;
+  std::vector<Output> raw_outputs_;
 };
 
 }  // namespace minigo

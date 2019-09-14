@@ -12,26 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "cc/dual_net/dual_net.h"
+
 #include <array>
 #include <deque>
 #include <map>
 #include <vector>
 
-#include "cc/dual_net/dual_net.h"
 #include "cc/position.h"
 #include "cc/random.h"
 #include "cc/symmetries.h"
 #include "cc/test_utils.h"
 #include "gtest/gtest.h"
+#include "tensorflow/core/framework/op.h"
+#include "tensorflow/core/framework/op_def_builder.h"
 
 #if MG_ENABLE_TF_DUAL_NET
 #include "cc/dual_net/tf_dual_net.h"
 #endif
 #if MG_ENABLE_LITE_DUAL_NET
 #include "cc/dual_net/lite_dual_net.h"
-#endif
-#if MG_ENABLE_TRT_DUAL_NET
-#include "cc/dual_net/trt_dual_net.h"
 #endif
 
 namespace minigo {
@@ -139,36 +139,36 @@ TEST(DualNetTest, TestStoneFeaturesWithCapture) {
 // Checks that the different backends produce the same result.
 TEST(DualNetTest, TestBackendsEqual) {
   struct Test {
-    Test(std::unique_ptr<DualNetFactory> factory, std::string extension)
-        : factory(std::move(factory)), extension(std::move(extension)) {}
-    std::unique_ptr<DualNetFactory> factory;
-    std::string extension;
+    Test(std::unique_ptr<ModelFactory> factory, std::string basename)
+        : factory(std::move(factory)), basename(std::move(basename)) {}
+    std::unique_ptr<ModelFactory> factory;
+    std::string basename;
   };
 
   std::map<std::string, Test> tests;
 
 #if MG_ENABLE_TF_DUAL_NET
   tests.emplace("TfDualNet",
-                Test(absl::make_unique<TfDualNetFactory>(), ".pb"));
+                Test(absl::make_unique<TfDualNetFactory>(), "test_model.pb"));
 #endif
 #if MG_ENABLE_LITE_DUAL_NET
-  tests.emplace("LiteDualNet",
-                Test(absl::make_unique<LiteDualNetFactory>(), ".tflite"));
-#endif
-#if MG_ENABLE_TRT_DUAL_NET
-  tests.emplace("TrtDualNet",
-                Test(absl::make_unique<TrtDualNetFactory>(), ".uff"));
+  tests.emplace("LiteDualNet", Test(absl::make_unique<LiteDualNetFactory>(),
+                                    "test_model.tflite"));
 #endif
 
-  DualNet::BoardFeatures nhwc_features;
-  Random().Uniform(0.0f, 1.0f, absl::MakeSpan(nhwc_features));
-  DualNet::BoardFeatures nchw_features;
-  using OutIter =
-      symmetry::NchwOutputIterator<kN, DualNet::kNumStoneFeatures, float>;
-  std::copy(nhwc_features.begin(), nhwc_features.end(),
-            OutIter(nchw_features.data()));
+  Random rnd(Random::kUniqueSeed, Random::kUniqueStream);
+  Model::Input input;
+  input.sym = symmetry::kIdentity;
+  input.to_play = Color::kBlack;
+  Position::Stones stones;
+  for (auto& x : stones) {
+    auto color = static_cast<Color>(rnd.UniformUint64() % 3);
+    if (color != Color::kEmpty) {
+      x = Stone(color, 0);
+    }
+  }
 
-  DualNet::Output ref_output;
+  Model::Output ref_output;
   std::string ref_name;
 
   auto policy_string = [](const std::array<float, kNumMoves>& policy) {
@@ -183,14 +183,13 @@ TEST(DualNetTest, TestBackendsEqual) {
     auto& test = kv.second;
     MG_LOG(INFO) << "Running " << name;
 
-    auto dual_net = test.factory->NewDualNet(
-        absl::StrCat("cc/dual_net/test_model", test.extension));
+    auto model =
+        test.factory->NewModel(absl::StrCat("cc/dual_net/", test.basename));
 
-    auto* features = dual_net->GetInputLayout() == DualNet::InputLayout::kNHWC
-                         ? &nhwc_features
-                         : &nchw_features;
-    DualNet::Output output;
-    dual_net->RunMany({features}, {&output}, nullptr);
+    Model::Output output;
+    std::vector<const Model::Input*> inputs = {&input};
+    std::vector<Model::Output*> outputs = {&output};
+    model->RunMany(inputs, &outputs, nullptr);
 
     if (ref_name.empty()) {
       ref_output = output;

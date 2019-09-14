@@ -25,17 +25,17 @@
 
 namespace minigo {
 
-
 RandomDualNet::RandomDualNet(std::string name, uint64_t seed,
                              float policy_stddev, float value_stddev)
-    : DualNet(std::move(name)),
-      rnd_(seed),
+    : Model(std::move(name), 1),
+      rnd_(seed, Random::kUniqueStream),
       policy_stddev_(policy_stddev),
       value_stddev_(value_stddev) {}
 
-void RandomDualNet::RunMany(std::vector<const BoardFeatures*> features,
-                            std::vector<Output*> outputs, std::string* model) {
-  for (auto* output : outputs) {
+void RandomDualNet::RunMany(const std::vector<const Input*>& inputs,
+                            std::vector<Output*>* outputs,
+                            std::string* model_name) {
+  for (auto* output : *outputs) {
     rnd_.NormalDistribution(0.5, policy_stddev_, &output->policy);
     for (auto& p : output->policy) {
       p = std::exp(p);
@@ -52,31 +52,27 @@ void RandomDualNet::RunMany(std::vector<const BoardFeatures*> features,
       output->value = rnd_.NormalDistribution(0, value_stddev_);
     } while (output->value < -1 || output->value > 1);
   }
-  if (model != nullptr) {
-    *model = name();
+  if (model_name != nullptr) {
+    *model_name = name();
   }
 }
 
-RandomDualNetFactory::RandomDualNetFactory(uint64_t seed, float policy_stddev,
-                                           float value_stddev)
-  : rnd_(seed), policy_stddev_(policy_stddev), value_stddev_(value_stddev) {}
+RandomDualNetFactory::RandomDualNetFactory(uint64_t seed) : seed_(seed) {}
 
-std::unique_ptr<DualNet> RandomDualNetFactory::NewDualNet(
-    const std::string& model) {
-  std::vector<absl::string_view> parts = absl::StrSplit(model, ':');
+std::unique_ptr<Model> RandomDualNetFactory::NewModel(
+    const std::string& descriptor) {
+  // TODO(tommadams): return a BufferedModel that wraps one RandomModel per
+  // CPU core.
+
+  std::vector<absl::string_view> parts = absl::StrSplit(descriptor, ':');
   MG_CHECK(parts.size() == 2);
 
   float policy_stddev, value_stddev;
   MG_CHECK(absl::SimpleAtof(parts[0], &policy_stddev));
   MG_CHECK(absl::SimpleAtof(parts[1], &value_stddev));
 
-  uint64_t seed;
-  {
-    absl::MutexLock lock(&mutex_);
-    seed = rnd_.UniformUint64();
-  }
-  return absl::make_unique<RandomDualNet>(absl::StrCat("rnd:", model), seed,
-                                          policy_stddev, value_stddev);
+  return absl::make_unique<RandomDualNet>(absl::StrCat("rnd:", descriptor),
+                                          seed_, policy_stddev, value_stddev);
 }
 
 }  // namespace minigo

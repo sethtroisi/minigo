@@ -13,11 +13,11 @@
 # limitations under the License.
 
 """
-Get local database of eval games from using Google Cloud Bigtable as
-the source of truth.
+Build local database of eval games using Google Cloud Bigtable as the source of
+truth.
 
 Inspiration from Seth's experience with CloudyGo db.
-Replaced the much slower and clunkier ratings.py
+Replacing the much slower and clunkier ratings.py
 
 Usage:
 
@@ -31,13 +31,14 @@ $ python3 ratings/cbt_ratings.py  \
 import sys
 sys.path.insert(0, '.')
 
-import re
 import math
+import random
+import re
+import sqlite3
 from collections import defaultdict, Counter
 
 import choix
 import numpy as np
-import sqlite3
 from absl import flags
 from tqdm import tqdm
 from google.cloud import bigtable
@@ -53,9 +54,9 @@ flags.mark_flags_as_required([
     "cbt_project", "cbt_instance"
 ])
 
-MODEL_REGEX = re.compile("(\d*)-(.*)")
-CROSS_EVAL_REGEX = re.compile("(v\d+)-(\d+)-vs-(v\d+)-(\d+)")
-MODELS_FROM_FN = re.compile("(\d{6}-[a-z-]+)-(\d{6}-[a-z-]+)$")
+MODEL_REGEX = re.compile(r"(\d*)-(.*)")
+CROSS_EVAL_REGEX = re.compile(r"(v\d+)-(\d+)-vs-(v\d+)-(\d+)")
+MODELS_FROM_FN = re.compile(r"(\d{6}-[a-z-]+)-(\d{6}-[a-z-]+)$")
 
 
 def assert_pair_matches(pb, pw, m1, m2, sgf_file):
@@ -64,7 +65,6 @@ def assert_pair_matches(pb, pw, m1, m2, sgf_file):
     if pb == m2 and pw == m1:
         return True
     assert False, ((pb, pw), (m1, m2), sgf_file)
-
 
 def determine_model_id(sgf_file, pb, pw, model_runs):
     """Determine which run+model PB and PW are."""
@@ -86,22 +86,23 @@ def determine_model_id(sgf_file, pb, pw, model_runs):
 
     simple = CROSS_EVAL_REGEX.search(sgf_file)
     if not simple:
-        # After #812 is resolved, All cross evals should be correctly labelled
-        # as vX-XXX-vs-vZ-ZZZ so this must be an inter-run eval games.
+        # After #812, All cross evals are as vX-XXX-vs-vZ-ZZZ,
+        # so this must be an inter-run eval games.
 
         # Check if both models (num + name) are unique to a single run.
-        return None
         if len(runs_pb & runs_pw) == 1:
             run = min(runs_pb & runs_pw)
             return run, run
-        print(sgf_file)
+
+        # Both v12 and v15 have the same name for both these models!
+        # 2018-09-30/1538304073-minigo-cc-evaluator-357-332-wb-9bjnq-0-000332-zealous-000357-arachne
         return None
 
     run_1, num_1, run_2, num_2 = simple.groups()
 
     # We have to unravel a mystery here.
     # filename tells up which number goes with which run,
-    # filename also tells us model_name (number + ame),
+    # filename also tells us model_name (number + name),
     # And pb,pw are model_name from PB[] and PW[].
     #
     # The easy case is num_1 != num_2:
@@ -186,8 +187,8 @@ def setup_models(models_table):
         for row in tqdm(models_table.read_rows()):
             cbt_models += 1
             name = row.cell_value(METADATA, b'model').decode()
-            run  = row.cell_value(METADATA, b'run').decode()
-            num  = int(row.cell_value(METADATA, b'model_num').decode())
+            run = row.cell_value(METADATA, b'run').decode()
+            num = int(row.cell_value(METADATA, b'model_num').decode())
             if (run, name) not in model_ids:
                 new_models.append((name, run, num))
 
@@ -197,9 +198,9 @@ def setup_models(models_table):
             print("New models insertted into db:", len(new_models))
 
             db.executemany(
-                  """INSERT INTO models VALUES (
-                  null, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, 0)""",
-                  new_models)
+                """INSERT INTO models VALUES (
+                null, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, 0)""",
+                new_models)
 
             # Read from db to pick up new model_ids.
             model_ids, model_runs = read_models(db)
@@ -208,18 +209,30 @@ def setup_models(models_table):
         return model_ids, model_runs
 
 
-def sync(eval_games_table, model_ids, model_runs):
+def sync():
+    # TODO(djk): table.exists() without admin=True, read_only=False.
+    models_table = (bigtable
+                    .Client(FLAGS.cbt_project, read_only=True)
+                    .instance(FLAGS.cbt_instance)
+                    .table("models"))
+
+    eval_games_table = (bigtable
+                        .Client(FLAGS.cbt_project, read_only=True)
+                        .instance(FLAGS.cbt_instance)
+                        .table("eval_games"))
+
+    model_ids, model_runs = setup_models(models_table)
     # TODO(sethtroisi): Potentially only update from a starting rows.
 
     status = Counter()
     game_records = []
 
     reader = tqdm(eval_games_table.read_rows(), desc="eval_game", unit=" rows")
-    for r_i, row in enumerate(reader):
+    for row in reader:
         row_key = row.row_key
 
-        if row_key == b'table_state':
-          continue
+        if row_key == TABLE_STATE:
+            continue
 
         sgf_file = row.cell_value(METADATA, b'sgf').decode()
         timestamp = sgf_file.split('-')[0]
@@ -279,7 +292,7 @@ def sync(eval_games_table, model_ids, model_runs):
 
         # Do all the calculations here with maps instead of in SQL.
         # num_games, num_wins, black_games, black_wins, white_games, white_wins
-        model_stats = defaultdict(lambda: [0,0,0,0,0,0])
+        model_stats = defaultdict(lambda: [0, 0, 0, 0, 0, 0])
 
         cur = c.execute("select b_id, w_id, black_won from games")
         for b_id, w_id, black_won in cur.fetchall():
@@ -293,7 +306,8 @@ def sync(eval_games_table, model_ids, model_runs):
             model_stats[w_id][4] += 1
             model_stats[w_id][5] += not black_won
 
-        c.executemany("""
+        c.executemany(
+            """
             UPDATE models set
                 num_games = ?, num_wins = ?,
                 black_games = ?, black_wins = ?,
@@ -305,7 +319,54 @@ def sync(eval_games_table, model_ids, model_runs):
 
     print()
     for s, count in status.most_common():
-        print("{:<10}".format(count),s )
+        print("{:<10}".format(count), s)
+
+
+def current_run(model_ids):
+    """Return the largest number run.
+
+    If you want something different, feel free to extend with fsdb or something.
+    """
+    all_runs = set(run for run, name in model_ids)
+
+    # TODO fix before submit
+    return max(all_runs)
+
+    # Assumption of the run format.
+    assert all(re.match("v[0-9]+", run) for run in all_runs), all_runs
+
+    # "Current" is defined as largest numbered run.
+    max_num = max(int(r[1:] for r in all_runs))
+    return 'v' + str(max_num)
+
+
+def run_win_records(run=None):
+    """Return all win records between two models both in run
+
+    If run is None, models must be in different runs.
+    """
+
+    with sqlite3.connect('cbt_ratings.db') as db:
+        if run:
+            data = db.execute(
+                """
+                SELECT model_winner, model_loser FROM wins
+                JOIN models m1, models m2 WHERE
+                    m1.bucket = ? AND m1.id = model_winner AND
+                    m2.bucket = ? AND m2.id = model_loser
+                """,
+                (run, run))
+        else:
+            # run=None is for cross eval, don't allow games from same run
+            data = db.execute("""
+                SELECT model_winner, model_loser FROM wins
+                JOIN models m1, models m2 WHERE
+                    m1.id = model_winner AND
+                    m2.id = model_loser AND
+                    m1.bucket != m2.bucket
+                """)
+
+    return data.fetchall()
 
 
 def compute_ratings(model_ids, data=None):
@@ -331,7 +392,7 @@ def compute_ratings(model_ids, data=None):
         new_id[m] = i
 
     # Create inverse model_ids lookup
-    model_names = {v:k for k,v in model_ids.items()}
+    model_names = {v: k for k, v in model_ids.items()}
 
     # A function to rewrite the data_ids in our pairs
     def ilsr_data(d):
@@ -366,60 +427,70 @@ def compute_ratings(model_ids, data=None):
 
 def top_n(n=10):
     with sqlite3.connect('cbt_ratings.db') as db:
-        model_ids, model_runs = read_models(db)
+        model_ids, _ = read_models(db)
 
-    data = wins_subset()
-    r = compute_ratings(model_ids, data)
+    data = run_win_records()
+    ratings = compute_ratings(model_ids, data)
     top_models = sorted(ratings.items(), key=lambda k: k[::-1])
     return top_models[-n:][::-1]
 
 
-def wins_subset(run=None):
-    with sqlite3.connect('cbt_ratings.db') as db:
-        if run:
-            data = db.execute(
-                """
-                select model_winner, model_loser from wins
-                join models m1 join models m2 where
-                    m1.bucket = ? AND m1.id = model_winner
-                    m2.bucket = ? AND m2.id = model_loser
-                """,
-                (run,run))
-        else:
-            # No run is for cross eval, don't allow games from same run
-            data = db.execute("""
-                select model_winner, model_loser from wins
-                """)
-            ("""
-                join models m1 join models m2 where
-                    m1.id = model_winner AND
-                    m2.id = model_loser AND
-                    m1.bucket != m2.bucket
-                """)
+def suggest_pairs(top_n=10, per_n=3, ignore_before=300):
+    """ Find the maximally interesting pairs of models to match up
+    First, sort the ratings by uncertainty.
+    Then, take the ten highest models with the highest uncertainty
+    For each of them, call them `m1`
+    Sort all the models by their distance from m1's rating and take the 20
+    nearest rated models. ('candidate_m2s')
+    Choose `per_n` random pairings, (m1, m2), from this list
 
-    return data.fetchall()
+    `top_n` will pair the top n models by uncertainty.
+    `per_n` will give each of the top_n models this many opponents
+    `ignore_before` is the model number to `filter` off, i.e., the early models.
+    Returns a list of *model numbers*, not model ids.
+    """
+
+    with sqlite3.connect('cbt_ratings.db') as db:
+        model_ids, model_runs = read_models(db)
+
+    run = current_run(model_ids)
+    data = run_win_records(run)
+
+    ratings = compute_ratings(model_ids, data)
+    ratings = [(name,) + rating for (run, name), rating in ratings.items()]
+    ratings.sort()
+
+    # Filter off the first X models, which improve quickly but are chaotic.
+    ratings = ratings[ignore_before:]
+
+    # Sort by rating variance
+    ratings.sort(key=lambda r: r[2], reverse=True)
+
+    pairs = []
+    for m1 in ratings[:top_n]:
+        print("Pairing {}, sigma {:.1f} (Rating {:.1f})".format(
+            m1[0], m1[2], m1[1]))
+
+        def rating_diff(m2):
+            """Rating difference between two models"""
+            return abs(m1[1] - m2[1])
+
+        candidate_m2s = sorted(ratings, key=rating_diff)[1:20]
+        for m2 in random.sample(candidate_m2s, per_n):
+            pairs.append((m1[0], m2[0]))
+            print("    {}, rating delta {:.1f}".format(m2[0], rating_diff(m2)))
+
+    return pairs
 
 
 def main():
     if FLAGS.sync_ratings:
-        # TODO(djk): table.exists() without admin=True, read_only=False.
-        models_table = (bigtable
-                    .Client(FLAGS.cbt_project, read_only=True)
-                    .instance(FLAGS.cbt_instance)
-                    .table("models"))
+        sync()
 
-        eval_games_table = (bigtable
-                    .Client(FLAGS.cbt_project, read_only=True)
-                    .instance(FLAGS.cbt_instance)
-                    .table("eval_games"))
+    with sqlite3.connect('cbt_ratings.db') as db:
+        model_ids, model_runs = read_models(db)
 
-        model_ids, model_runs = setup_models(models_table)
-        sync(eval_games_table, model_ids, model_runs)
-    else:
-        with sqlite3.connect('cbt_ratings.db') as db:
-            model_ids, model_runs = read_models(db)
-
-    data = wins_subset()
+    data = run_win_records()
 
     print("DB has", len(data), "games")
     if not data:
@@ -429,7 +500,7 @@ def main():
     top_models = sorted(ratings.items(), key=lambda k: k[::-1])
     print()
     print("Best models")
-    for k, v in top_models[-20:][::-1]
+    for k, v in top_models[-20:][::-1]:
         print("{:>30}: {}".format("/".join(k), v))
 
     # Stats on recent models
@@ -445,6 +516,10 @@ def main():
         else:
             print("{:>30}:  not found".format(name))
 
+    random.seed(5)
+    # Suggest some pairs
+    print()
+    suggest_pairs(5, 2)
 
 if __name__ == '__main__':
     remaining_argv = flags.FLAGS(sys.argv, known_only=True)

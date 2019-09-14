@@ -51,7 +51,8 @@ def maybe_insert_model(db, bucket, name, num):
                       0, 0, 0,
                       0, 0, 0)""", [name, num, bucket])
 
-def model_id(name_or_num):
+
+def model_id_of(name_or_num):
     db = sqlite3.connect("ratings.db")
     bucket = fsdb.models_dir()
     if not isinstance(name_or_num, str):
@@ -63,15 +64,6 @@ def model_num_for(model_id):
     try:
         db = sqlite3.connect("ratings.db")
         return db.execute("select model_num from models where id = ?",
-                          (model_id,)).fetchone()[0]
-    except:
-        print("No model found for id: {}".format(model_id))
-        raise
-
-def model_name_for(model_id):
-    try:
-        db = sqlite3.connect("ratings.db")
-        return db.execute("select model_name from models where id = ?",
                           (model_id,)).fetchone()[0]
     except:
         print("No model found for id: {}".format(model_id))
@@ -307,6 +299,7 @@ def wins_subset(bucket):
 
 def main():
     if FLAGS.sync_ratings:
+        #sync(root)
         sync("data/ratings_test/eval")
 
     models = fsdb.get_models()
@@ -318,13 +311,19 @@ def main():
 
     db = sqlite3.connect("ratings.db")
     print("db has", db.execute("select count(*) from wins").fetchone()[0], "games")
+
     for m in models[-10:]:
-        m_id = model_id(m[0])
+        m_id = model_id_of(m[0])
         if m_id in r:
             rat, sigma = r[m_id]
             print("{:>30}:  {:.2f} ({:.3f})".format(m[1], rat, sigma))
         else:
             print("{}, Model id not found({})".format(m[1], m_id))
+
+    # Suggest some pairs
+    random.seed(5)
+    print()
+    suggest_pairs(5, 2)
 
 
 if __name__ == '__main__':
