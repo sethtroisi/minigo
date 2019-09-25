@@ -284,10 +284,13 @@ def model_fn(features, labels, mode, params):
         train_op = optimizer.minimize(combined_cost, global_step=global_step)
 
     # Computations to be executed on CPU, outside of the main TPU queues.
-    def eval_metrics_host_call_fn(policy_output, value_output, pi_tensor,
-                                  value_tensor, policy_cost, value_cost,
-                                  l2_cost, combined_cost, step,
-                                  est_mode=tf.estimator.ModeKeys.TRAIN):
+    def eval_metrics_host_call_fn(
+            features,
+            policy_output, value_output,
+            pi_tensor, value_tensor,
+            policy_cost, value_cost,
+            l2_cost, combined_cost,
+            step, est_mode=tf.estimator.ModeKeys.TRAIN):
         policy_entropy = -tf.reduce_mean(tf.reduce_sum(
             policy_output * tf.log(policy_output), axis=1))
         # pi_tensor is one_hot when generated from sgfs (for supervised learning)
@@ -306,6 +309,8 @@ def model_fn(features, labels, mode, params):
 
         value_cost_normalized = value_cost / params['value_cost_weight']
         avg_value_observed = tf.reduce_mean(value_tensor)
+        avg_stones_black = tf.reduce_mean(tf.reduce_sum(features[:,:,:,1], [1,2]))
+        avg_stones_white = tf.reduce_mean(tf.reduce_sum(features[:,:,:,0], [1,2]))
 
         with tf.variable_scope('metrics'):
             metric_ops = {
@@ -315,13 +320,17 @@ def model_fn(features, labels, mode, params):
                 'l2_cost': tf.metrics.mean(l2_cost),
                 'policy_entropy': tf.metrics.mean(policy_entropy),
                 'combined_cost': tf.metrics.mean(combined_cost),
-                'avg_value_observed': tf.metrics.mean(avg_value_observed),
                 'policy_accuracy_top_1': tf.metrics.mean(policy_output_in_top1),
                 'policy_accuracy_top_3': tf.metrics.mean(policy_output_in_top3),
                 'policy_top_1_confidence': tf.metrics.mean(policy_top_1_confidence),
+                'value_confidence': tf.metrics.mean(tf.abs(value_output)),
+
+                # Metrics about input data
                 'policy_target_top_1_confidence': tf.metrics.mean(
                     policy_target_top_1_confidence),
-                'value_confidence': tf.metrics.mean(tf.abs(value_output)),
+                'avg_value_observed': tf.metrics.mean(avg_value_observed),
+                'avg_stones_black': tf.metrics.mean(avg_stones_black),
+                'avg_stones_white': tf.metrics.mean(avg_stones_white),
             }
 
         if est_mode == tf.estimator.ModeKeys.EVAL:
@@ -349,6 +358,7 @@ def model_fn(features, labels, mode, params):
         return summary.all_summary_ops() + [cond_reset_op]
 
     metric_args = [
+        features,
         policy_output,
         value_output,
         labels['pi_tensor'],
