@@ -285,7 +285,7 @@ def model_fn(features, labels, mode, params):
 
     # Computations to be executed on CPU, outside of the main TPU queues.
     def eval_metrics_host_call_fn(
-            features,
+            avg_stones, avg_stones_delta,
             policy_output, value_output,
             pi_tensor, value_tensor,
             policy_cost, value_cost,
@@ -309,8 +309,6 @@ def model_fn(features, labels, mode, params):
 
         value_cost_normalized = value_cost / params['value_cost_weight']
         avg_value_observed = tf.reduce_mean(value_tensor)
-        avg_stones_black = tf.reduce_mean(tf.reduce_sum(features[:,:,:,1], [1,2]))
-        avg_stones_white = tf.reduce_mean(tf.reduce_sum(features[:,:,:,0], [1,2]))
 
         with tf.variable_scope('metrics'):
             metric_ops = {
@@ -329,8 +327,7 @@ def model_fn(features, labels, mode, params):
                 'policy_target_top_1_confidence': tf.metrics.mean(
                     policy_target_top_1_confidence),
                 'avg_value_observed': tf.metrics.mean(avg_value_observed),
-                'avg_stones_black': tf.metrics.mean(avg_stones_black),
-                'avg_stones_white': tf.metrics.mean(avg_stones_white),
+                'avg_stones': tf.metrics.mean(tf.reduce_mean(avg_stones)),
             }
 
         if est_mode == tf.estimator.ModeKeys.EVAL:
@@ -348,6 +345,8 @@ def model_fn(features, labels, mode, params):
             for metric_name, metric_op in metric_ops.items():
                 summary.scalar(metric_name, metric_op[1], step=eval_step)
 
+            summary.histogram("avg_stones_delta", avg_stones_delta)
+
         # Reset metrics occasionally so that they are mean of recent batches.
         reset_op = tf.variables_initializer(tf.local_variables('metrics'))
         cond_reset_op = tf.cond(
@@ -357,8 +356,14 @@ def model_fn(features, labels, mode, params):
 
         return summary.all_summary_ops() + [cond_reset_op]
 
+    # compute here to avoid sending all of features to cpu.
+    avg_stones_black = tf.reduce_sum(features[:,:,:,1], [1,2])
+    avg_stones_white = tf.reduce_sum(features[:,:,:,0], [1,2])
+    avg_stones = avg_stones_black + avg_stones_white
+    avg_stones_delta = avg_stones_black - avg_stones_white
+
     metric_args = [
-        features,
+        avg_stones, avg_stones_delta,
         policy_output,
         value_output,
         labels['pi_tensor'],
