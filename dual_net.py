@@ -567,13 +567,9 @@ def model_inference_fn(features, training, params):
 def tpu_model_inference_fn(features):
     """Builds the model graph suitable for running on TPU.
 
-    It does two things:
      1) Mark all weights as constant, which improves TPU inference performance
         because it prevents the weights being transferred to the TPU every call
         to Session.run().
-     2) Adds constant to the graph with a unique value and marks it as a
-        dependency on the rest of the model. This works around a TensorFlow bug
-        that prevents multiple models being run on a single TPU.
 
     Returns:
         (policy_output, value_output, logits) tuple of tensors.
@@ -583,17 +579,12 @@ def tpu_model_inference_fn(features):
             return tf.guarantee_const(
                 getter(name, *args, **kwargs), name=name + '/GuaranteeConst')
     with tf.variable_scope('', custom_getter=custom_getter):
-        # TODO(tommadams): remove the tf.control_dependencies context manager
-        # when a fixed version of TensorFlow is released.
-        t = int(time.time())
-        epoch_time = tf.constant(t, name='epoch_time_%d' % t)
-        with tf.control_dependencies([epoch_time]):
-            if FLAGS.input_layout == 'nhwc':
-                feature_shape = [-1, go.N, go.N, get_features_planes()]
-            else:
-                feature_shape = [-1, get_features_planes(), go.N, go.N]
-            features = tf.reshape(features, feature_shape)
-            return model_inference_fn(features, False, FLAGS.flag_values_dict())
+        if FLAGS.input_layout == 'nhwc':
+            feature_shape = [-1, go.N, go.N, get_features_planes()]
+        else:
+            feature_shape = [-1, get_features_planes(), go.N, go.N]
+        features = tf.reshape(features, feature_shape)
+        return model_inference_fn(features, False, FLAGS.flag_values_dict())
 
 
 def maybe_set_seed():
